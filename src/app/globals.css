@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+/*
+ * UIProof design system
+ * ---------------------
+ * A paper-and-ink console palette with three signal colours that mean exactly
+ * one thing each:
+ *   · pass / verified   (green)
+ *   · regression        (red)
+ *   · attention / diff  (amber)
+ * Colours resolve through custom properties, so the whole console adapts to the
+ * operating-system colour scheme without a theme switcher or a flash.
+ */
+
+:root {
+  --paper: oklch(0.985 0.003 250);
+  --paper-grid: oklch(0.93 0.005 250);
+  --surface: oklch(1 0 0);
+  --surface-muted: oklch(0.972 0.004 250);
+  --ink: oklch(0.235 0.012 255);
+  --ink-soft: oklch(0.455 0.011 255);
+  --ink-faint: oklch(0.55 0.011 255);
+  --line: oklch(0.916 0.004 255);
+  --line-strong: oklch(0.856 0.006 255);
+  --accent: oklch(0.52 0.11 215);
+  --accent-strong: oklch(0.44 0.1 215);
+  --accent-soft: oklch(0.955 0.026 215);
+  --pass: oklch(0.52 0.12 156);
+  --pass-soft: oklch(0.955 0.03 156);
+  --regress: oklch(0.535 0.196 27);
+  --regress-soft: oklch(0.955 0.032 27);
+  --attention: oklch(0.54 0.13 76);
+  --attention-soft: oklch(0.965 0.04 85);
+  --app-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --app-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: oklch(0.185 0.008 255);
+    --paper-grid: oklch(0.26 0.01 255);
+    --surface: oklch(0.225 0.009 255);
+    --surface-muted: oklch(0.265 0.01 255);
+    --ink: oklch(0.962 0.004 255);
+    --ink-soft: oklch(0.79 0.008 255);
+    --ink-faint: oklch(0.66 0.009 255);
+    --line: oklch(0.305 0.01 255);
+    --line-strong: oklch(0.39 0.012 255);
+    --accent: oklch(0.74 0.11 210);
+    --accent-strong: oklch(0.82 0.1 210);
+    --accent-soft: oklch(0.3 0.045 215);
+    --pass: oklch(0.76 0.14 156);
+    --pass-soft: oklch(0.3 0.05 156);
+    --regress: oklch(0.72 0.17 27);
+    --regress-soft: oklch(0.32 0.06 27);
+    --attention: oklch(0.8 0.14 80);
+    --attention-soft: oklch(0.32 0.05 85);
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-grid: var(--paper-grid);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-pass: var(--pass);
+  --color-pass-soft: var(--pass-soft);
+  --color-regress: var(--regress);
+  --color-regress-soft: var(--regress-soft);
+  --color-attention: var(--attention);
+  --color-attention-soft: var(--attention-soft);
+  --font-sans: var(--app-sans);
+  --font-mono: var(--app-mono);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--paper);
+    color: var(--ink);
+    font-family: var(--app-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: var(--accent-soft);
+    color: var(--accent-strong);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@keyframes uiproof-slide {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(310%);
+  }
+}
+
+@layer components {
+  /* Small caps mono label — the console's connective tissue. */
+  .label-caps {
+    font-family: var(--app-mono);
+    font-size: 0.6875rem;
+    line-height: 1;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /* Themed pixel grid: a nod to the pixel diff this product is built on. */
+  .pixel-grid {
+    background-image: radial-gradient(circle at 1px 1px, var(--paper-grid) 1px, transparent 0);
+    background-size: 14px 14px;
+  }
+
+  /* Checkerboard behind screenshots so transparent/padded regions are visible. */
+  .checkerboard {
+    background-color: var(--surface);
+    background-image:
+      linear-gradient(45deg, var(--surface-muted) 25%, transparent 25%, transparent 75%, var(--surface-muted) 75%),
+      linear-gradient(45deg, var(--surface-muted) 25%, transparent 25%, transparent 75%, var(--surface-muted) 75%);
+    background-size: 18px 18px;
+    background-position: 0 0, 9px 9px;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
