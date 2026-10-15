@@ -235,8 +235,9 @@ counts (e.g. a 10 × 10 block changed on a 100 × 100 white canvas is exactly 10
 
 Checked against a running server, not just in tests:
 
-- **Real run (dev, desktop):** 39,333 / 1,024,000 pixels changed → 3.8411 % → `regression`, in 2.9 s
-  (capture 1.75 s, comparison 292 ms).
+- **Real run (dev, desktop):** 39,334 / 1,024,000 pixels changed → 3.8412 % → `regression`.
+  The first run of a server session takes ≈ 2.9 s because it launches Chromium; warm runs are ~1 s
+  (measured on a fresh clone: capture 565 ms, comparison 207 ms).
 - **Diff image consistency:** the generated `diff.png` contains exactly 39,333 pixels of the diff
   colour — the metric and the picture agree — plus 5,101 anti-aliased pixels that pixelmatch
   excluded.
