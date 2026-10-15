@@ -126,7 +126,10 @@ export function ToleranceControl({ value, onChange, disabled = false }: Toleranc
         disabled={disabled}
         onChange={(event) => onChange(Number.parseFloat(event.target.value))}
         aria-describedby="uiproof-tolerance-hint"
-        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-line accent-[var(--accent)] disabled:cursor-not-allowed"
+        /* h-6 + py-[9px] keeps a 24px pointer target (WCAG 2.2 target size) while
+           bg-clip-content paints only the 6px track inside it, so the visible slider
+           stays a hairline. */
+        className="h-6 w-full cursor-pointer appearance-none rounded-full bg-line bg-clip-content py-[9px] accent-[var(--accent)] disabled:cursor-not-allowed"
       />
       <p id="uiproof-tolerance-hint" className="text-[11px] leading-relaxed text-ink-faint">
         Changed pixels at or below this share of the viewport still pass. Anything above is reported

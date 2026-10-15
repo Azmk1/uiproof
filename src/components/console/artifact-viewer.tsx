@@ -49,7 +49,9 @@ export function ArtifactViewer({ report }: { readonly report: ComparisonReport }
                 onClick={() => setZoom(option)}
                 aria-pressed={zoom === option}
                 className={cn(
-                  "rounded-md px-2 py-1 font-mono text-[10px] tracking-wide uppercase transition-colors",
+                  // 11px type and a 24px-tall hit box: the previous 10px/py-1 pair sat 1px under
+                  // the WCAG 2.2 target-size minimum.
+                  "rounded-md px-2 py-1.5 font-mono text-[11px] tracking-wide uppercase transition-colors",
                   zoom === option ? "bg-surface text-ink shadow-[0_1px_2px_rgb(0_0_0/0.06)]" : "text-ink-soft hover:text-ink",
                 )}
               >

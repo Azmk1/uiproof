@@ -95,11 +95,44 @@ single revision (5/5 identical).
 - **No `next/image`** for artifacts: they are already-final run-scoped PNGs; the rule override is
   scoped in `eslint.config.mjs`.
 
+### M6 — Pre-Phase-2 delivery and quality audit
+
+Phase 1 was pushed to `github.com/Azmk1/uiproof` (branch `main`, normal fast-forward, no history
+rewritten) and then re-audited against the published commits.
+
+| Audit check | Result |
+|-------------|--------|
+| Remote | `main` at the audited SHA; `gh api` lists both commits; repository default branch `main` |
+| Lint / typecheck / tests / build | clean · clean · 44/44 · ✓ (re-run after the fixes below) |
+| End-to-end run on final code | Clicked **Run comparison** in the browser: `regression`, 39,334 / 1,024,000 px = **3.8412 %**, capture 852 ms, diff 197 ms — identical to the Phase 1 figure at the same revision |
+| Production path | `pnpm build && next start` on a scratch port: `POST /api/compare` → `200`, mobile 8.8729 %, foreign origin `403`; scratch server stopped afterwards |
+| Engine is real, not mocked | No `mock`/`fake`/`stub`/hardcoded metric anywhere in `src`; fresh run wrote 3 decodable PNGs + `report.json`; independently decoded `diff.png` holds **exactly** the 39,334 red pixels the metric claims; raw baseline-vs-current pixel difference is 52,052 (the rest are anti-aliasing/sub-threshold, as pixelmatch intends) |
+| UI audit (Playwright, light + dark, 1440 px and 390 px, `/` and `/demo`) | No horizontal escape anywhere, no contrast failures in either scheme, no console errors, every control reachable by `Tab` shows a focus ring |
+
+Three genuine defects were found by that audit and fixed:
+
+1. **Prose scrambled by flex layout** — two `<p>` elements used `display: flex` with a text run, an
+   inline `<span>` and more text as *direct* children. Each run therefore became its own flex item and
+   the sentence wrapped out of reading order (visible on screen as "Only /demo the local fixtures…").
+   Both now wrap the prose in a single element, which is what makes the sentence wrap normally.
+2. **Tolerance slider target and thumb** — the range input was 6 px tall, so (a) its pointer target was
+   6 px against the WCAG 2.2 24 px minimum and (b) Chromium clipped the thumb to that box, painting a
+   squashed 16×7 blob. It is now a 24 px box with `bg-clip-content`, so the tracked area stays a 6 px
+   hairline while the thumb renders as a full 16×16 circle (measured from pixels, not assumed).
+3. **Screenshot zoom buttons** — 10 px type in a 23 px-tall box, i.e. 1 px under the target-size
+   minimum; now 11 px type in a 29 px box, matching the design's 11 px type floor.
+
+Remaining known issues after the audit (all minor, none blocking): the only sub-24 px hit boxes are
+visually hidden radio inputs whose real target is a 288×66 or 93×29 label; the skip-link and the run-id
+line are clipped by design; the Next.js dev-tools badge (dev only) has no focus ring; the environment
+here cannot composite browser frames reliably, so the audit was done by measuring the rendered DOM and
+decoding rendered pixels rather than by looking at whole-page screenshots.
+
 ## Blockers
 
 None outstanding.
 
 ## Next approved action
 
-Awaiting hands-on review of Phase 1. The recommended next milestone (baseline approval + drift
-tracking) is described at the end of the README; no Phase 2 work has started.
+Phase 1 is delivered on `main` and awaiting hands-on review. The recommended next milestone (baseline
+approval + drift tracking) is described at the end of the README; no Phase 2 work has started.

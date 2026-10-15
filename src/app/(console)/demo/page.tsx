@@ -71,8 +71,13 @@ export default function FixturesPage() {
           <p className="text-[13px] leading-relaxed text-ink-soft">{control.summary}</p>
           <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-ink-faint">
             <Lock className="mt-0.5 size-3 shrink-0" />
-            The engine only ever navigates to routes under <span className="font-mono">/demo</span>.
-            Absolute URLs, traversal and protocol-relative paths are rejected before Chromium starts.
+            {/* One wrapper element: direct text runs inside a flex row become separate flex
+                items, which wraps the sentence out of reading order. */}
+            <span>
+              The engine only ever navigates to routes under <span className="font-mono">/demo</span>.
+              Absolute URLs, traversal and protocol-relative paths are rejected before Chromium
+              starts.
+            </span>
           </p>
         </div>
       </section>

@@ -53,7 +53,7 @@ export function RunHistory({ reports, activeId, loadingId, onSelect }: RunHistor
                   />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-[12px] font-medium">{report.targetLabel}</span>
-                    <span className="truncate font-mono text-[10px] text-ink-faint">
+                    <span className="truncate font-mono text-[11px] text-ink-faint">
                       {report.viewportLabel} · {formatRelativeTime(report.createdAt)}
                     </span>
                   </span>

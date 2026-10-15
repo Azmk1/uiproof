@@ -255,8 +255,12 @@ export function ComparisonConsole() {
 
               <p className="flex items-start gap-1.5 border-t border-line pt-3 text-[11px] leading-relaxed text-ink-faint">
                 <Lock className="mt-0.5 size-3 shrink-0" />
-                Only the local <span className="font-mono">/demo</span> fixtures can be captured —
-                absolute URLs are rejected by the engine.
+                {/* Text must stay inside one element: as direct flex children, each text run and
+                    inline span would become its own flex item and the sentence would wrap apart. */}
+                <span>
+                  Only the local <span className="font-mono">/demo</span> fixtures can be captured —
+                  absolute URLs are rejected by the engine.
+                </span>
               </p>
             </CardContent>
           </Card>
