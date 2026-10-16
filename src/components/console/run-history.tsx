@@ -28,6 +28,8 @@ export function RunHistory({ reports, activeId, loadingId, onSelect }: RunHistor
           Runs are written to <span className="font-mono">.uiproof/data</span> and reload with the page.
         </p>
       ) : (
+        // Every stored run is listed, not just the selected source's, because that is
+        // what is on disk — the timeline below is the one scoped to the current source.
         <ul role="list" className="-mx-1 flex max-h-[300px] flex-col overflow-y-auto">
           {reports.map((report) => {
             const isActive = report.id === activeId;
@@ -48,13 +50,18 @@ export function RunHistory({ reports, activeId, loadingId, onSelect }: RunHistor
                     aria-hidden="true"
                     className={cn(
                       "size-1.5 shrink-0 rounded-full",
-                      report.status === "regression" ? "bg-regress" : "bg-pass",
+                      report.status === "regression"
+                        ? "bg-regress"
+                        : report.status === "captured"
+                          ? "bg-attention"
+                          : "bg-pass",
                     )}
                   />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-[12px] font-medium">{report.targetLabel}</span>
                     <span className="truncate font-mono text-[11px] text-ink-faint">
-                      {report.viewportLabel} · {formatRelativeTime(report.createdAt)}
+                      {report.viewportLabel} · {report.mode === "capture" ? "capture · " : ""}
+                      {formatRelativeTime(report.createdAt)}
                     </span>
                   </span>
                   {isLoading ? (
@@ -66,7 +73,9 @@ export function RunHistory({ reports, activeId, loadingId, onSelect }: RunHistor
                         report.status === "regression" ? "text-regress" : "text-ink-soft",
                       )}
                     >
-                      {formatChangePercentage(report.changePercentage, 2)}%
+                      {report.status === "captured"
+                        ? "captured"
+                        : `${formatChangePercentage(report.changePercentage, 2)}%`}
                     </span>
                   )}
                 </button>

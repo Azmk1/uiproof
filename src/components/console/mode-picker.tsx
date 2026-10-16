@@ -1,7 +1,7 @@
 "use client";
 
-import { GitCompareArrows, ShieldCheck } from "lucide-react";
-import type { ComparisonMode, ComparisonTarget, FixtureVariantOption } from "@/lib/compare/types";
+import { Camera, GitCompareArrows, ShieldCheck } from "lucide-react";
+import type { ComparisonMode, FixtureVariantOption } from "@/lib/compare/types";
 import { cn } from "@/lib/utils";
 
 const MODE_COPY: Record<ComparisonMode, { label: string; description: string; icon: typeof ShieldCheck }> = {
@@ -15,10 +15,16 @@ const MODE_COPY: Record<ComparisonMode, { label: string; description: string; ic
     description: "Capture the page under test and diff it against the baseline you approved — drift detection.",
     icon: ShieldCheck,
   },
+  capture: {
+    label: "Capture only",
+    description: "Take one screenshot and store it. How a registered route gets its first baseline.",
+    icon: Camera,
+  },
 };
 
 interface ModePickerProps {
-  readonly target: ComparisonTarget;
+  /** Modes this source offers: a project route has no fixture pair to compare against. */
+  readonly modes: readonly ComparisonMode[];
   readonly selected: ComparisonMode;
   readonly onSelect: (mode: ComparisonMode) => void;
   readonly disabled?: boolean;
@@ -26,12 +32,12 @@ interface ModePickerProps {
   readonly blockedReason?: string | null;
 }
 
-export function ModePicker({ target, selected, onSelect, disabled = false, blockedReason = null }: ModePickerProps) {
+export function ModePicker({ modes, selected, onSelect, disabled = false, blockedReason = null }: ModePickerProps) {
   return (
     <fieldset disabled={disabled} className="flex flex-col gap-2 disabled:opacity-70">
       <legend className="label-caps">Comparison mode</legend>
       <div className="mt-1 flex flex-col gap-2">
-        {target.modes.map((mode) => {
+        {modes.map((mode) => {
           const copy = MODE_COPY[mode];
           const isSelected = mode === selected;
           const isBlocked = isSelected && blockedReason !== null;

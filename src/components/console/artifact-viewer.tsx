@@ -21,10 +21,16 @@ const ALT_TEXT: Record<ArtifactName, string> = {
 };
 
 export function ArtifactViewer({ report }: { readonly report: ComparisonReport }) {
-  const [tab, setTab] = useState<ArtifactName>("diff");
+  // A capture-only run has no reference and no difference image, so only the tabs whose
+  // artifact actually exists are shown.
+  const available = TABS.filter((item) => report.artifacts[item.name]);
+  const [tab, setTab] = useState<ArtifactName>(() =>
+    report.artifacts.diff ? "diff" : report.artifacts.current ? "current" : "baseline",
+  );
   const [zoom, setZoom] = useState<"fit" | "full">("fit");
 
-  const artifact = report.artifacts[tab];
+  const artifact = report.artifacts[tab] ?? report.artifacts.current;
+  if (!artifact) return null;
 
   return (
     <section aria-label="Captured artifacts" className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-5">
@@ -81,7 +87,7 @@ export function ArtifactViewer({ report }: { readonly report: ComparisonReport }
 
       <Tabs value={tab} onValueChange={(value) => setTab(value as ArtifactName)}>
         <TabsList aria-label="Screenshot to inspect">
-          {TABS.map((item) => (
+          {available.map((item) => (
             <TabsTrigger key={item.name} value={item.name}>
               <item.icon />
               {item.label}
@@ -89,8 +95,8 @@ export function ArtifactViewer({ report }: { readonly report: ComparisonReport }
           ))}
         </TabsList>
 
-        {TABS.map((item) => {
-          const current = report.artifacts[item.name];
+        {available.map((item) => {
+          const current = report.artifacts[item.name]!;
           return (
             <TabsContent key={item.name} value={item.name}>
               <div

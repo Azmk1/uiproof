@@ -7,16 +7,21 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * The browser suite drives a real production server over HTTP.
+ * The browser suites drive real production servers over HTTP.
  *
- * It runs `next start` (not `next dev`) so the pages under test are the ones a user
- * would actually get, and against a throwaway data directory, so a test run can never
- * touch the runs and baselines a developer has accumulated locally.
+ * They run `next start` (not `next dev`) so the pages under test are the ones a user
+ * would actually get, and by default against a throwaway data directory, so a test run
+ * can never touch the runs and baselines a developer has accumulated locally.
+ *
+ * The server is always bound to `127.0.0.1`, which is the control that keeps remote
+ * clients out of the local-only write endpoints — `Host: 127.0.0.1` is only a header a
+ * client can write, but a socket bound to loopback cannot be connected to from another
+ * machine at all.
  */
 
 const NEXT_BIN = path.join("node_modules", "next", "dist", "bin", "next");
 const PORT_FILE = path.join(os.tmpdir(), "uiproof-e2e-runtime.json");
-const CANDIDATE_PORTS = [3210, 3211, 3212, 3213, 3214];
+const DEFAULT_CANDIDATE_PORTS = [3210, 3211, 3212, 3213, 3214, 3215, 3216, 3217];
 const READY_TIMEOUT_MS = 90_000;
 
 export interface E2eRuntime {
@@ -24,6 +29,26 @@ export interface E2eRuntime {
   readonly port: number;
   readonly dataDir: string;
   readonly root: string;
+}
+
+export interface StartE2eServerOptions {
+  /** Extra environment for the server process (data dir, project config, …). */
+  readonly env?: Readonly<Record<string, string>>;
+  /** Reuse a data directory instead of creating — and deleting — a temporary one. */
+  readonly dataDir?: string;
+  /** Ports to try in order. Useful when several servers run in one suite. */
+  readonly portCandidates?: readonly number[];
+  /** Root the server runs from; defaults to the repository root. */
+  readonly rootDir?: string;
+  /** Human label used in log lines and error messages. */
+  readonly label?: string;
+  /** The global setup writes the shared runtime file; ad-hoc servers do not. */
+  readonly writeRuntimeFile?: boolean;
+}
+
+export interface StartedE2eServer {
+  readonly runtime: E2eRuntime;
+  readonly stop: () => Promise<void>;
 }
 
 function isPortFree(port: number): Promise<boolean> {
@@ -37,14 +62,14 @@ function isPortFree(port: number): Promise<boolean> {
   });
 }
 
-async function pickPort(): Promise<number> {
-  for (const port of CANDIDATE_PORTS) {
+async function pickPort(candidates: readonly number[]): Promise<number> {
+  for (const port of candidates) {
     if (await isPortFree(port)) return port;
   }
-  throw new Error(`No free port among ${CANDIDATE_PORTS.join(", ")} for the UIProof e2e server`);
+  throw new Error(`No free port among ${candidates.join(", ")} for a UIProof e2e server`);
 }
 
-async function waitForReady(url: string, child: ChildProcess): Promise<void> {
+async function waitForReady(url: string, child: ChildProcess, log: string[]): Promise<void> {
   const deadline = Date.now() + READY_TIMEOUT_MS;
   let lastError = "no response yet";
   while (Date.now() < deadline) {
@@ -60,23 +85,27 @@ async function waitForReady(url: string, child: ChildProcess): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
-  throw new Error(`The e2e server did not become ready within ${READY_TIMEOUT_MS}ms (${lastError})`);
+  throw new Error(
+    `The e2e server did not become ready within ${READY_TIMEOUT_MS}ms (${lastError})\n${log.join("")}`,
+  );
 }
 
-export async function startE2eServer(): Promise<{ runtime: E2eRuntime; stop: () => Promise<void> }> {
-  const root = process.cwd();
+export async function startE2eServer(options: StartE2eServerOptions = {}): Promise<StartedE2eServer> {
+  const root = options.rootDir ?? process.cwd();
+  const label = options.label ?? "uiproof";
   if (!existsSync(path.join(root, ".next", "BUILD_ID"))) {
     throw new Error("No production build found. Run `pnpm build` before the browser suite (`pnpm test:e2e`).");
   }
 
-  const port = await pickPort();
-  const url = `http://localhost:${port}`;
-  const dataDir = path.join(os.tmpdir(), `uiproof-e2e-${randomUUID()}`);
+  const port = await pickPort(options.portCandidates ?? DEFAULT_CANDIDATE_PORTS);
+  const url = `http://127.0.0.1:${port}`;
+  const ownsDataDir = options.dataDir === undefined;
+  const dataDir = options.dataDir ?? path.join(os.tmpdir(), `uiproof-e2e-${randomUUID()}`);
   await mkdir(dataDir, { recursive: true });
 
-  const child = spawn(process.execPath, [NEXT_BIN, "start", "-p", String(port)], {
+  const child = spawn(process.execPath, [NEXT_BIN, "start", "-H", "127.0.0.1", "-p", String(port)], {
     cwd: root,
-    env: { ...process.env, UIPROOF_DATA_DIR: dataDir, NODE_ENV: "production" },
+    env: { ...process.env, UIPROOF_DATA_DIR: dataDir, NODE_ENV: "production", ...options.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -85,24 +114,28 @@ export async function startE2eServer(): Promise<{ runtime: E2eRuntime; stop: () 
   child.stderr?.on("data", (chunk: Buffer) => log.push(chunk.toString()));
 
   try {
-    await waitForReady(url, child);
+    await waitForReady(url, child, log);
   } catch (error) {
     child.kill();
     throw new Error(`${error instanceof Error ? error.message : String(error)}\n${log.join("")}`);
   }
 
-  await writeFile(PORT_FILE, JSON.stringify({ url, port, dataDir, root } satisfies E2eRuntime), "utf8");
+  const runtime: E2eRuntime = { url, port, dataDir, root };
+  if (options.writeRuntimeFile) {
+    await writeFile(PORT_FILE, JSON.stringify(runtime satisfies E2eRuntime), "utf8");
+  }
+  process.stdout.write(`e2e: ${label} listening on ${url} (data: ${dataDir})\n`);
 
   return {
-    runtime: { url, port, dataDir, root },
+    runtime,
     stop: async () => {
-      await rm(PORT_FILE, { force: true });
+      if (options.writeRuntimeFile) await rm(PORT_FILE, { force: true });
       if (child.exitCode === null) {
         child.kill("SIGTERM");
         await new Promise((resolve) => setTimeout(resolve, 500));
         if (child.exitCode === null) child.kill("SIGKILL");
       }
-      await rm(dataDir, { recursive: true, force: true });
+      if (ownsDataDir) await rm(dataDir, { recursive: true, force: true });
     },
   };
 }

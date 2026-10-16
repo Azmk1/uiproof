@@ -1,0 +1,344 @@
+/*
+ * The example application's stylesheet.
+ *
+ * Everything here is deliberately deterministic: no web fonts, no transitions, no
+ * animations, no gradients that depend on a colour profile. A screenshot of these pages
+ * should be byte-stable run to run, so that the only thing UIProof ever reports is a
+ * change somebody actually made.
+ */
+:root {
+  --page: #f5f6f8;
+  --surface: #ffffff;
+  --ink: #171b22;
+  --ink-soft: #5b6472;
+  --line: #e2e5ea;
+  --brand: #1f4ed8;
+  --good: #10715c;
+  --warn: #9a3d10;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 64px;
+  padding: 0 32px;
+  background: var(--surface);
+  /* The changed view recolours this rule — a wide, unmissable visual difference. */
+  border-bottom: 3px solid var(--brand);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  font-size: 17px;
+}
+
+.brand .mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.nav {
+  display: flex;
+  gap: 4px;
+  margin-left: 12px;
+}
+
+.nav a {
+  padding: 6px 12px;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.nav a[aria-current="page"] {
+  background: var(--page);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--page);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 32px;
+}
+
+.title {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #e8ecfb;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+button.primary {
+  appearance: none;
+  border: 1px solid var(--brand);
+  background: var(--brand);
+  color: #fff;
+  border-radius: 9px;
+  padding: 9px 16px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.ghost {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 9px;
+  padding: 9px 16px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+}
+
+.metric-label {
+  margin: 0 0 8px;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.metric-value {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.delta {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.delta.up {
+  color: var(--good);
+}
+
+.delta.down {
+  color: var(--warn);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+th {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: #fafbfc;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status.paid {
+  background: #e6f4f0;
+  color: var(--good);
+}
+
+.status.overdue {
+  background: #fdeee6;
+  color: var(--warn);
+}
+
+.amount {
+  font-variant-numeric: tabular-nums;
+}
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 420px;
+  margin-bottom: 18px;
+}
+
+.form-row label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.form-row input,
+.form-row select {
+  font: inherit;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.help {
+  color: var(--ink-soft);
+  font-size: 13px;
+  margin: 0 0 24px;
+  max-width: 60ch;
+}
+
+.plan-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.price {
+  margin: 4px 0 12px;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+ul.checks {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+footer.note {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 32px 40px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}

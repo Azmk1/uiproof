@@ -4,16 +4,17 @@
   "private": true,
   "description": "UIProof — automated frontend quality platform for visual regression detection.",
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "next dev -H 127.0.0.1 -p 3000",
     "build": "next build",
-    "start": "next start -p 3000",
+    "start": "next start -H 127.0.0.1 -p 3000",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "vitest run --config vitest.e2e.config.mts",
     "verify": "eslint && tsc --noEmit && vitest run && next build && vitest run --config vitest.e2e.config.mts",
-    "setup:browser": "playwright install chromium"
+    "setup:browser": "playwright install chromium",
+    "example:app": "node examples/example-app/server.mjs"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.5.0",

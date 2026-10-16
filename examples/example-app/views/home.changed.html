@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Billing — Overview</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <header class="topbar" style="border-bottom-color: #9a3d10">
+      <span class="brand"><span class="mark" style="background: #9a3d10">AB</span> Acme Billing</span>
+      <nav class="nav" aria-label="Sections">
+        <a href="/" aria-current="page">Overview</a>
+        <a href="/settings">Settings</a>
+        <a href="/pricing">Pricing</a>
+      </nav>
+      <span class="spacer"></span>
+      <span class="user">Dana Okafor <span class="avatar">DO</span></span>
+    </header>
+
+    <main>
+      <div class="title">
+        <div>
+          <h1>Overview</h1>
+          <p class="subtitle">Billing health for the last 30 days.</p>
+        </div>
+        <span class="badge" style="background: #fdeee6; color: #9a3d10">Payment retries running</span>
+      </div>
+
+      <section class="metrics">
+        <div class="card">
+          <p class="metric-label">Monthly recurring revenue</p>
+          <p class="metric-value amount">$51,940</p>
+          <span class="delta up">+$3,740 refreshed</span>
+        </div>
+        <div class="card">
+          <p class="metric-label">Active accounts</p>
+          <p class="metric-value amount">1,284</p>
+          <span class="delta up">+36 this month</span>
+        </div>
+        <div class="card">
+          <p class="metric-label">Failed payments</p>
+          <p class="metric-value amount">12</p>
+          <span class="delta down">+5 this week</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header>
+          <h2>Recent invoices</h2>
+          <button class="primary" type="button">Export CSV</button>
+        </header>
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Invoice</th>
+              <th scope="col">Account</th>
+              <th scope="col">Amount</th>
+              <th scope="col">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>INV-1043</td>
+              <td>Northwind Trading</td>
+              <td class="amount">$4,120.00</td>
+              <td><span class="status overdue">Overdue</span></td>
+            </tr>
+            <tr>
+              <td>INV-1042</td>
+              <td>Kestrel Labs</td>
+              <td class="amount">$2,480.00</td>
+              <td><span class="status paid">Paid</span></td>
+            </tr>
+            <tr>
+              <td>INV-1041</td>
+              <td>Solvent Group</td>
+              <td class="amount">$1,960.00</td>
+              <td><span class="status overdue">Overdue</span></td>
+            </tr>
+            <tr>
+              <td>INV-1040</td>
+              <td>Prairie Media</td>
+              <td class="amount">$860.00</td>
+              <td><span class="status paid">Paid</span></td>
+            </tr>
+            <tr>
+              <td>INV-1039</td>
+              <td>Harbor Freight Co</td>
+              <td class="amount">$3,240.00</td>
+              <td><span class="status paid">Paid</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <footer class="note">Example application for UIProof — not a real billing product.</footer>
+  </body>
+</html>

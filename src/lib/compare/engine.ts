@@ -4,44 +4,65 @@ import { capturePage } from "./capture";
 import { compareImages } from "./diff";
 import { ComparisonError } from "./errors";
 import { computeChangePercentage, computeVerdict, parseMaxDiffPercent, DEFAULT_PIXEL_THRESHOLD } from "./metrics";
-import { resolveRunTarget, requireTarget } from "./run-options";
+import { baselineScopeOf, resolveRun, type ResolvedRunSource } from "./run-options";
 import { ARTIFACT_FILENAMES, type ArtifactName } from "./storage-paths";
-import { artifactUrl, persistRun } from "./storage";
+import { artifactUrl, persistRun, type RunArtifacts } from "./storage";
 import { DEFAULT_VIEWPORT_ID, buildCaptureUrl, getViewport } from "./targets";
-import type { ArtifactInfo, BaselineReference, ComparisonReport, ComparisonTarget, ViewportPreset } from "./types";
+import { buildProjectCaptureUrl } from "@/lib/projects/registry";
+import type {
+  ArtifactInfo,
+  BaselineReference,
+  ComparisonMode,
+  ComparisonReport,
+  ComparisonStatus,
+  RegisteredProject,
+  ReportArtifacts,
+  RunSource,
+  ViewportPreset,
+} from "./types";
 
 /**
  * The visual regression pipeline.
  *
- *   fixture  mode: capture the paired fixture route  → capture the page under test
- *   baseline mode: load the approved baseline image  → capture the page under test
+ *   fixture  mode: capture the paired fixture route   → capture the page under test
+ *   baseline mode: load the approved baseline image   → capture the page under test
+ *   capture  mode: capture the page under test only   → nothing to compare against yet
  *   then: pixelmatch diff → verdict → persist artifacts + report
  *
- * Both modes share the comparison, the metrics and the storage layers, so a drift run
- * and a fixture run produce the same shape of report. The difference is where the
- * reference image came from, and the report records that explicitly (`mode`, `baseline`).
+ * All three modes share the capture, comparison, metrics and storage layers, so a
+ * registered project and a demo fixture produce the same shape of report. For a project
+ * the captured page is an application on its own origin; the capture is restricted to
+ * the origins that application's registration allows, and the report records exactly
+ * which project, route and origin it came from.
  */
 
 export interface RunComparisonOptions {
-  readonly targetId: unknown;
+  /** Phase 1/2 spelling of a demo target. Ignored when `source` is given. */
+  readonly targetId?: unknown;
+  /** Phase 3 spelling: a demo target or a registered project route. */
+  readonly source?: unknown;
   readonly viewportId?: unknown;
   readonly maxDiffPercent?: unknown;
-  /** `fixture` (default) or `baseline`. */
+  /** `fixture` (default), `baseline` or `capture`. */
   readonly mode?: unknown;
   /** Page state to capture; only meaningful for targets that declare variants. */
   readonly variantId?: unknown;
   /** Origin of the running UIProof instance, used to reach the local fixtures. */
   readonly origin: string;
+  /** Registered applications; pass the loaded configuration's projects. */
+  readonly projects?: readonly RegisteredProject[];
+  readonly projectConfigError?: string | null;
 }
 
 interface ReferenceSide {
-  readonly referencePng: Buffer;
+  readonly referencePng: Buffer | null;
   readonly currentPng: Buffer;
   /** Route of the reference side, recorded for the report's `baselinePath`. */
   readonly baselinePath: string;
   readonly baselineReference: BaselineReference | null;
   readonly captureMs: number;
   readonly browser: string;
+  readonly blockedRequests: number;
 }
 
 export function createReportId(): string {
@@ -50,61 +71,83 @@ export function createReportId(): string {
 
 /** Phase 1 behaviour: render both fixture routes at one viewport and diff them. */
 async function referenceFromFixturePair(input: {
-  readonly target: ComparisonTarget;
+  readonly source: ResolvedRunSource;
   readonly viewport: ViewportPreset;
-  readonly origin: string;
   readonly currentRoute: string;
 }): Promise<ReferenceSide> {
+  const fixturePath = input.source.fixtureBaselinePath;
+  if (!fixturePath) {
+    throw new ComparisonError(
+      "mode_unavailable",
+      `${input.source.label} has no paired fixture route, so fixture comparison is not available for it.`,
+    );
+  }
+
   let baselineUrl: URL;
   let currentUrl: URL;
   try {
-    baselineUrl = buildCaptureUrl(input.origin, input.target.baseline.path);
-    currentUrl = buildCaptureUrl(input.origin, input.currentRoute);
+    baselineUrl = buildCaptureUrl(input.source.origin, fixturePath);
+    currentUrl = buildCaptureUrl(input.source.origin, input.currentRoute);
   } catch (cause) {
     throw new ComparisonError("invalid_target", (cause as Error).message, { cause });
   }
 
   const [baseline, current] = await Promise.all([
-    capturePage({ url: baselineUrl, viewport: input.viewport }),
-    capturePage({ url: currentUrl, viewport: input.viewport }),
+    capturePage({ url: baselineUrl, viewport: input.viewport, label: input.source.label }),
+    capturePage({ url: currentUrl, viewport: input.viewport, label: input.source.label }),
   ]);
 
   return {
     referencePng: baseline.png,
     currentPng: current.png,
-    baselinePath: input.target.baseline.path,
+    baselinePath: fixturePath,
     baselineReference: null,
     captureMs: Math.max(baseline.durationMs, current.durationMs),
     browser: current.browser,
+    blockedRequests: baseline.blockedRequests + current.blockedRequests,
   };
 }
 
+/** The URL for the page under test, demo or registered project. */
+function captureUrlFor(source: ResolvedRunSource, route: string): URL {
+  try {
+    if (source.kind === "project") {
+      if (!source.project || !source.route) throw new RangeError("Project source is incomplete.");
+      // Rebuilt from the registration, never from the request, so the approved origin
+      // and path are the only ones that can be reached.
+      return buildProjectCaptureUrl(source.project, source.route);
+    }
+    return buildCaptureUrl(source.origin, route);
+  } catch (cause) {
+    if (cause instanceof ComparisonError) throw cause;
+    throw new ComparisonError("invalid_target", (cause as Error).message, { cause });
+  }
+}
+
 /**
- * Drift detection: the reference image is the approved baseline stored on disk, and
- * only the page under test is captured. A missing baseline is a typed 404 rather than
- * a silent fallback to the fixture pair — approving is always an explicit act.
+ * Drift detection: the reference image is the approved baseline stored on disk, and only
+ * the page under test is captured. A missing baseline is a typed 404 rather than a silent
+ * fallback to the fixture pair — approving is always an explicit act.
  */
 async function referenceFromApprovedBaseline(input: {
-  readonly target: ComparisonTarget;
+  readonly source: ResolvedRunSource;
   readonly viewport: ViewportPreset;
-  readonly origin: string;
   readonly currentRoute: string;
 }): Promise<ReferenceSide> {
-  const approved = await readActiveBaseline(input.target.id, input.viewport.id);
+  const approved = await readActiveBaseline(baselineScopeOf(input.source), input.viewport.id);
   if (!approved) {
     throw new ComparisonError(
       "baseline_not_found",
-      `No approved baseline for ${input.target.label} at ${input.viewport.label} yet. Approve a run as the baseline, then run again to detect drift.`,
+      `No approved baseline for ${input.source.label} at ${input.viewport.label} yet. Approve a run as the baseline, then run again to detect drift.`,
     );
   }
 
-  let currentUrl: URL;
-  try {
-    currentUrl = buildCaptureUrl(input.origin, input.currentRoute);
-  } catch (cause) {
-    throw new ComparisonError("invalid_target", (cause as Error).message, { cause });
-  }
-  const current = await capturePage({ url: currentUrl, viewport: input.viewport });
+  const current = await capturePage({
+    url: captureUrlFor(input.source, input.currentRoute),
+    viewport: input.viewport,
+    label: input.source.label,
+    allowedOrigins: input.source.allowedOrigins,
+  });
 
   return {
     referencePng: approved.png,
@@ -113,13 +156,61 @@ async function referenceFromApprovedBaseline(input: {
     baselineReference: toBaselineReference(approved.version),
     captureMs: current.durationMs,
     browser: current.browser,
+    blockedRequests: current.blockedRequests,
+  };
+}
+
+/** The first screenshot of a route: nothing to compare against, so nothing is claimed. */
+async function captureOnly(input: {
+  readonly source: ResolvedRunSource;
+  readonly viewport: ViewportPreset;
+  readonly currentRoute: string;
+}): Promise<ReferenceSide> {
+  const current = await capturePage({
+    url: captureUrlFor(input.source, input.currentRoute),
+    viewport: input.viewport,
+    label: input.source.label,
+    allowedOrigins: input.source.allowedOrigins,
+  });
+
+  return {
+    referencePng: null,
+    currentPng: current.png,
+    baselinePath: input.source.path,
+    baselineReference: null,
+    captureMs: current.durationMs,
+    browser: current.browser,
+    blockedRequests: current.blockedRequests,
+  };
+}
+
+function toReportSource(source: ResolvedRunSource, blockedRequests: number): RunSource {
+  return {
+    kind: source.kind,
+    scopeKey: source.scopeKey,
+    label: source.label,
+    projectId: source.project?.id ?? null,
+    projectName: source.project?.name ?? null,
+    routeId: source.route?.id ?? null,
+    routeName: source.route?.name ?? null,
+    origin: source.origin,
+    path: source.path,
+    blockedRequests,
   };
 }
 
 export async function runComparison(options: RunComparisonOptions): Promise<ComparisonReport> {
   const totalStartedAt = Date.now();
 
-  const target = requireTarget(options.targetId);
+  const source = resolveRun({
+    source: options.source,
+    targetId: options.targetId,
+    mode: options.mode,
+    variantId: options.variantId,
+    uiProofOrigin: options.origin,
+    projects: options.projects ?? [],
+    projectConfigError: options.projectConfigError ?? null,
+  });
 
   const viewport = getViewport(options.viewportId ?? DEFAULT_VIEWPORT_ID);
   if (!viewport) {
@@ -133,28 +224,15 @@ export async function runComparison(options: RunComparisonOptions): Promise<Comp
     throw new ComparisonError("invalid_options", (cause as Error).message, { cause });
   }
 
-  const { mode, variantId, currentRoute } = resolveRunTarget({
-    target,
-    mode: options.mode,
-    variantId: options.variantId,
-  });
-
-  const shared = { target, viewport, origin: options.origin, currentRoute };
+  const shared = { source: source.source, viewport, currentRoute: source.currentRoute };
   const reference =
-    mode === "baseline"
+    source.mode === "baseline"
       ? await referenceFromApprovedBaseline(shared)
-      : await referenceFromFixturePair(shared);
+      : source.mode === "capture"
+        ? await captureOnly(shared)
+        : await referenceFromFixturePair(shared);
 
-  const compareStartedAt = Date.now();
-  const comparison = compareImages(reference.referencePng, reference.currentPng, {
-    pixelThreshold: DEFAULT_PIXEL_THRESHOLD,
-  });
-  const compareMs = Date.now() - compareStartedAt;
-
-  const changePercentage = computeChangePercentage(comparison.changedPixels, comparison.comparedPixels);
-  const status = computeVerdict(changePercentage, maxDiffPercent);
   const reportId = createReportId();
-
   const artifact = (name: ArtifactName, png: Buffer, width: number, height: number): ArtifactInfo => ({
     url: artifactUrl(reportId, ARTIFACT_FILENAMES[name]),
     bytes: png.byteLength,
@@ -162,29 +240,44 @@ export async function runComparison(options: RunComparisonOptions): Promise<Comp
     height,
   });
 
-  const report: ComparisonReport = {
-    id: reportId,
-    createdAt: new Date().toISOString(),
-    status,
-    mode,
-    variantId,
-    baseline: reference.baselineReference,
-    target: {
-      id: target.id,
-      label: target.label,
-      baselinePath: reference.baselinePath,
-      currentPath: currentRoute,
-    },
-    viewport,
-    metrics: {
+  let status: ComparisonStatus;
+  let metrics: ComparisonReport["metrics"];
+  let artifacts: ReportArtifacts;
+  let compareMs = 0;
+  let persisted: RunArtifacts = { currentPng: reference.currentPng };
+
+  if (reference.referencePng === null) {
+    status = "captured";
+    metrics = {
+      changedPixels: 0,
+      comparedPixels: 0,
+      changePercentage: 0,
+      pixelThreshold: DEFAULT_PIXEL_THRESHOLD,
+      maxDiffPercent,
+      dimensionsChanged: false,
+    };
+    // A capture has only the screenshot: there is no baseline and no difference image.
+    artifacts = {
+      current: artifact("current", reference.currentPng, viewport.width, viewport.height),
+    };
+  } else {
+    const compareStartedAt = Date.now();
+    const comparison = compareImages(reference.referencePng, reference.currentPng, {
+      pixelThreshold: DEFAULT_PIXEL_THRESHOLD,
+    });
+    compareMs = Date.now() - compareStartedAt;
+
+    const changePercentage = computeChangePercentage(comparison.changedPixels, comparison.comparedPixels);
+    status = computeVerdict(changePercentage, maxDiffPercent);
+    metrics = {
       changedPixels: comparison.changedPixels,
       comparedPixels: comparison.comparedPixels,
       changePercentage,
       pixelThreshold: DEFAULT_PIXEL_THRESHOLD,
       maxDiffPercent,
       dimensionsChanged: comparison.dimensionsChanged,
-    },
-    artifacts: {
+    };
+    artifacts = {
       baseline: artifact(
         "baseline",
         reference.referencePng,
@@ -193,7 +286,33 @@ export async function runComparison(options: RunComparisonOptions): Promise<Comp
       ),
       current: artifact("current", reference.currentPng, comparison.currentSize.width, comparison.currentSize.height),
       diff: artifact("diff", comparison.diffPng, comparison.width, comparison.height),
+    };
+    persisted = {
+      currentPng: reference.currentPng,
+      baselinePng: reference.referencePng,
+      diffPng: comparison.diffPng,
+    };
+  }
+
+  const report: ComparisonReport = {
+    id: reportId,
+    createdAt: new Date().toISOString(),
+    status,
+    mode: source.mode as ComparisonMode,
+    variantId: source.variantId,
+    baseline: reference.baselineReference,
+    source: toReportSource(source.source, reference.blockedRequests),
+    target: {
+      // Demo targets keep their catalogue id so Phase 1/2 reports and readers stay
+      // compatible; a project route is identified by its scope key.
+      id: source.source.target?.id ?? source.source.scopeKey,
+      label: source.source.label,
+      baselinePath: reference.baselinePath,
+      currentPath: source.currentRoute,
     },
+    viewport,
+    metrics,
+    artifacts,
     engine: {
       provider: "playwright",
       comparator: "pixelmatch",
@@ -204,11 +323,7 @@ export async function runComparison(options: RunComparisonOptions): Promise<Comp
     },
   };
 
-  await persistRun(report, {
-    baselinePng: reference.referencePng,
-    currentPng: reference.currentPng,
-    diffPng: comparison.diffPng,
-  });
+  await persistRun(report, persisted);
 
   return report;
 }

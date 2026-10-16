@@ -1,3 +1,4 @@
+import { baselineApiPath, sourceRequest, type SourceSelection } from "@/lib/compare/source-selection";
 import type {
   ActivateBaselineResponse,
   ApiErrorBody,
@@ -78,7 +79,8 @@ export function fetchReport(id: string): Promise<ReportResponse> {
 }
 
 export interface RunComparisonInput {
-  readonly targetId: string;
+  /** A demo fixture target, or a route of a registered local application. */
+  readonly selection: SourceSelection;
   readonly viewportId: string;
   readonly maxDiffPercent: number;
   readonly mode: ComparisonMode;
@@ -89,20 +91,24 @@ export async function createComparison(input: RunComparisonInput): Promise<Compa
   const response = await requestJson<{ report: ComparisonReport }>("/api/compare", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      source: sourceRequest(input.selection),
+      viewportId: input.viewportId,
+      maxDiffPercent: input.maxDiffPercent,
+      mode: input.mode,
+      variantId: input.variantId,
+    }),
   });
   return response.report;
 }
 
-/** The approved baseline (and its history) for one target/viewport pair. */
-export async function fetchBaseline(targetId: string, viewportId: string): Promise<BaselineResponse> {
-  return requestJson<BaselineResponse>(
-    `/api/baselines/${encodeURIComponent(targetId)}/${encodeURIComponent(viewportId)}`,
-  );
+/** The approved baseline (and its history) for one source/viewport pair. */
+export async function fetchBaseline(selection: SourceSelection, viewportId: string): Promise<BaselineResponse> {
+  return requestJson<BaselineResponse>(baselineApiPath(selection, viewportId));
 }
 
 export interface ApproveBaselineInput {
-  readonly targetId: string;
+  readonly selection: SourceSelection;
   readonly viewportId: string;
   readonly sourceReportId: string;
   readonly note?: string;
@@ -113,18 +119,23 @@ export async function approveBaseline(input: ApproveBaselineInput): Promise<Appr
   return requestJson<ApproveBaselineResponse>("/api/baselines", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      source: sourceRequest(input.selection),
+      viewportId: input.viewportId,
+      sourceReportId: input.sourceReportId,
+      note: input.note,
+    }),
   });
 }
 
 /** Makes an existing version active again — the explicit replace/restore action. */
 export async function activateBaselineVersion(input: {
-  readonly targetId: string;
+  readonly selection: SourceSelection;
   readonly viewportId: string;
   readonly versionId: string;
 }): Promise<ActivateBaselineResponse> {
   return requestJson<ActivateBaselineResponse>(
-    `/api/baselines/${encodeURIComponent(input.targetId)}/${encodeURIComponent(input.viewportId)}/activate`,
+    `${baselineApiPath(input.selection, input.viewportId)}/activate`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

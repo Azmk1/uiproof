@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Billing — Settings</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand"><span class="mark">AB</span> Acme Billing</span>
+      <nav class="nav" aria-label="Sections">
+        <a href="/">Overview</a>
+        <a href="/settings" aria-current="page">Settings</a>
+        <a href="/pricing">Pricing</a>
+      </nav>
+      <span class="spacer"></span>
+      <span class="user">Dana Okafor <span class="avatar">DO</span></span>
+    </header>
+
+    <main>
+      <div class="title">
+        <div>
+          <h1>Settings</h1>
+          <p class="subtitle">Where invoices are sent and who can see them.</p>
+        </div>
+      </div>
+
+      <p class="help">
+        Changing the billing contact affects every future invoice. Historical invoices keep the address they
+        were issued with.
+      </p>
+
+      <section class="panel" style="padding: 24px">
+        <div class="form-row">
+          <label for="billing-email">Billing contact</label>
+          <input id="billing-email" type="email" value="finance@acme.example" />
+        </div>
+        <div class="form-row">
+          <label for="invoice-terms">Payment terms</label>
+          <select id="invoice-terms">
+            <option>Net 14</option>
+            <option selected>Net 30</option>
+            <option>Net 60</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="reminder-days">Reminder after</label>
+          <input id="reminder-days" type="number" value="7" />
+        </div>
+        <button class="primary" type="button">Save changes</button>
+      </section>
+    </main>
+
+    <footer class="note">Example application for UIProof — not a real billing product.</footer>
+  </body>
+</html>

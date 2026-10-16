@@ -46,15 +46,23 @@ export function isTrustedRequest(facts: RequestFacts): boolean {
   return isSameHost(facts.origin, facts.host);
 }
 
-const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"]);
+/**
+ * Names that mean "this machine". Deliberately *not* in the set:
+ *  · `0.0.0.0` and `::` — the unspecified/wildcard addresses. A request that carries
+ *    them connected to a wildcard bind, which is reachable from the whole network, so
+ *    treating them as loopback would hand write access to anyone on the LAN.
+ *  · anything that merely contains "localhost" as a substring.
+ */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 /**
- * True when a request arrived on a loopback address.
+ * True when the *header* names a loopback address.
  *
- * UIProof's state-changing baseline endpoints are deliberately local-only: the dev
- * server also listens on the LAN interface, so "same origin" alone would let anyone
- * on the network approve baselines for a project they can reach. The host is read
- * from the request, never from a body or a query parameter.
+ * This is a header check, not a network check: `Host` is written by the client, so a
+ * remote caller can send `Host: 127.0.0.1` and pass. It exists as defence in depth on
+ * top of the real control, which is that UIProof binds to a loopback interface (`pnpm
+ * dev` / `pnpm start` / the browser suite all pass `-H 127.0.0.1`), so an off-machine
+ * client has no connection to make. See `docs/PROGRESS.md` for the honest limits.
  */
 export function isLoopbackHost(host: string | null): boolean {
   if (!host) return false;
@@ -63,16 +71,22 @@ export function isLoopbackHost(host: string | null): boolean {
   const withoutPort = trimmed.startsWith("[")
     ? trimmed.slice(0, trimmed.indexOf("]") + 1)
     : trimmed.split(":")[0];
-  if (LOOPBACK_HOSTNAMES.has(withoutPort)) return true;
+  // `localhost.` is the same name written as an absolute FQDN.
+  const normalized = withoutPort.endsWith(".") ? withoutPort.slice(0, -1) : withoutPort;
+  if (LOOPBACK_HOSTNAMES.has(normalized)) return true;
   // 127.0.0.0/8 is loopback in full, not just 127.0.0.1.
-  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(withoutPort);
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalized);
 }
 
 /**
- * Guard for state-changing local operations. Both conditions must hold: the request is
- * trusted (same-origin rules above) and it reached UIProof over loopback. An explicit
- * `UIPROOF_ALLOW_REMOTE_BASELINES=1` opts a deliberate remote deployment out — it is off
- * by default, so a plain `next start` on a shared host cannot be administered remotely.
+ * Guard for state-changing local operations.
+ *
+ * Two conditions must hold: the request is trusted (same-origin rules above) and it
+ * arrived over loopback. Because `Host` is client-supplied, the second condition only
+ * raises the cost of a mistake — it is not an authentication mechanism. The control
+ * that actually keeps other machines out is the loopback bind in the `dev`/`start`
+ * scripts; `UIPROOF_ALLOW_REMOTE_BASELINES=1` exists only for someone who has
+ * deliberately put UIProof behind their own access control.
  */
 export function isLocalAdminRequest(facts: RequestFacts): boolean {
   if (!isTrustedRequest(facts)) return false;

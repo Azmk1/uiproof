@@ -3,14 +3,20 @@ import { approveBaseline } from "@/lib/compare/baselines";
 import type { ApproveBaselineResponse } from "@/lib/compare/types";
 import { requireLocalAdmin } from "@/lib/http/api-guard";
 import { failureFrom, guardResponse, isErrorResponse, readJsonObject } from "@/lib/http/api-response";
+import { scopeFromRequest } from "@/lib/http/baseline-handlers";
 
 /**
  * `POST /api/baselines` — approve a stored run's `current.png` as the baseline for one
- * target/viewport pair.
+ * scope and viewport.
  *
- * Approval is never triggered by a comparison; it only ever happens here, explicitly,
- * and only from a trusted local request. The run has to belong to the same target and
- * viewport, so a Desktop capture can never be adopted as the Mobile reference.
+ * Body, Phase 3: `{ source: { kind, projectId, routeId }, viewportId, sourceReportId, note? }`
+ * Body, Phase 1/2: `{ targetId, viewportId, sourceReportId, note? }` — still accepted
+ * unchanged, and read as a demo scope.
+ *
+ * Approval is never triggered by a comparison; it only ever happens here, explicitly, and
+ * only from a trusted local request. The run has to belong to the same scope *and* the
+ * same viewport, so a Desktop capture can never be adopted as the Mobile reference and one
+ * project's run can never become another project's baseline.
  */
 export async function POST(request: Request) {
   const guard = requireLocalAdmin(request, "approve a baseline");
@@ -21,7 +27,7 @@ export async function POST(request: Request) {
 
   try {
     const { manifest, version } = await approveBaseline({
-      targetId: body.targetId,
+      scope: scopeFromRequest({ targetId: body.targetId, source: body.source }),
       viewportId: body.viewportId,
       sourceReportId: body.sourceReportId,
       note: body.note,

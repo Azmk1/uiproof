@@ -18,6 +18,42 @@ describe("isSameHost", () => {
   });
 });
 
+describe("isLoopbackHost (Phase 3 hardening)", () => {
+  it("accepts the absolute form of the loopback name", () => {
+    expect(isLoopbackHost("localhost.")).toBe(true);
+    expect(isLoopbackHost(" 127.0.0.1 ")).toBe(true);
+  });
+
+  it("rejects the wildcard addresses a network-reachable bind answers on", () => {
+    // A request carrying these connected to a wildcard bind, which every machine on the
+    // network can reach. Treating them as local would hand out write access.
+    expect(isLoopbackHost("0.0.0.0")).toBe(false);
+    expect(isLoopbackHost("0.0.0.0:3000")).toBe(false);
+    expect(isLoopbackHost("::")).toBe(false);
+    expect(isLoopbackHost("[::]")).toBe(false);
+    expect(isLoopbackHost("[::]:3000")).toBe(false);
+  });
+
+  it("rejects anything that is not exactly a loopback name", () => {
+    expect(isLoopbackHost("192.168.1.50:3000")).toBe(false);
+    expect(isLoopbackHost("uiproof.example.com")).toBe(false);
+    expect(isLoopbackHost("mylocalhost.example.com")).toBe(false);
+    expect(isLoopbackHost("127.0.0.1.evil.example")).toBe(false);
+    expect(isLoopbackHost("128.0.0.1")).toBe(false);
+    expect(isLoopbackHost("notlocalhost")).toBe(false);
+    expect(isLoopbackHost(null)).toBe(false);
+    expect(isLoopbackHost("")).toBe(false);
+  });
+
+  it("is a header check, not a network check — the bind is the real control", () => {
+    // Documented honestly: a remote caller can write this header. What stops them is
+    // that the server is only listening on 127.0.0.1 (asserted by loopback-binding.test.ts).
+    expect(isLoopbackHost("127.0.0.1")).toBe(true);
+    expect(isLocalAdminRequest({ origin: null, host: "127.0.0.1:3000", fetchSite: null })).toBe(true);
+    expect(isLocalAdminRequest({ origin: null, host: "0.0.0.0:3000", fetchSite: null })).toBe(false);
+  });
+});
+
 describe("isTrustedRequest", () => {
   it("allows same-origin browser requests", () => {
     expect(

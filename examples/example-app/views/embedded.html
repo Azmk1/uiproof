@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Billing — Partners</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand"><span class="mark">AB</span> Acme Billing</span>
+      <nav class="nav" aria-label="Sections">
+        <a href="/">Overview</a>
+        <a href="/settings">Settings</a>
+        <a href="/pricing">Pricing</a>
+        <a href="/embedded" aria-current="page">Partners</a>
+      </nav>
+      <span class="spacer"></span>
+      <span class="user">Dana Okafor <span class="avatar">DO</span></span>
+    </header>
+
+    <main>
+      <div class="title">
+        <div>
+          <h1>Partners</h1>
+          <p class="subtitle">This page pulls a logo from a different origin.</p>
+        </div>
+      </div>
+
+      <section class="card">
+        <p class="metric-label">Partner logo</p>
+        <!--
+          Deliberately hosted somewhere else. UIProof blocks it by default: a capture is
+          restricted to the registered origin unless the registration lists this origin in
+          `allowedOrigins`. The capture still succeeds — the request is refused, not the page.
+        -->
+        <img
+          src="https://cdn.example.com/acme-partner-logo.png"
+          alt="Partner logo"
+          width="200"
+          height="52"
+          style="border: 1px dashed #e2e5ea; border-radius: 8px"
+        />
+        <p class="help" style="margin: 16px 0 0">
+          If the box above is empty, the image request never left this machine.
+        </p>
+      </section>
+    </main>
+
+    <footer class="note">Example application for UIProof — not a real billing product.</footer>
+  </body>
+</html>

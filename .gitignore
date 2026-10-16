@@ -24,6 +24,9 @@
 /.uiproof/
 /.logs/
 
+# local project registrations (see examples/uiproof.config.example.json)
+/uiproof.config.json
+
 # local Freebuff workspace metadata
 /.freebuff/
 

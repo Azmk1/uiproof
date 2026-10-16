@@ -37,16 +37,17 @@ export default function ConsolePage() {
     <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-10 px-5 py-8 lg:px-8 lg:py-12">
       <section className="flex flex-col gap-5">
         <div className="flex flex-wrap items-center gap-3">
-          <Badge variant="accent">phase 2 · drift detection</Badge>
+          <Badge variant="accent">phase 3 · your own app</Badge>
           <span className="label-caps">visual regression console</span>
         </div>
         <h1 className="max-w-3xl text-[clamp(2rem,4.5vw,2.85rem)] leading-[1.04] font-semibold tracking-[-0.035em]">
           Approve a screen, then catch every drift from it.
         </h1>
         <p className="max-w-2xl text-[15px] leading-relaxed text-ink-soft">
-          UIProof renders a screen in headless Chromium, compares the screenshot against the baseline you
-          approved — or against its paired fixture — and highlights exactly what moved, alongside the
-          measured share of the viewport that changed.
+          UIProof renders a screen in headless Chromium — one of its demo fixtures, or any route you register
+          from an application already running on this machine — compares the screenshot against the baseline
+          you approved, and highlights exactly what moved, alongside the measured share of the viewport that
+          changed.
         </p>
         <ol className="flex flex-wrap items-center gap-x-3 gap-y-2">
           {PIPELINE.map((step, index) => (

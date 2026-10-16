@@ -102,7 +102,9 @@ export const COMPARISON_TARGETS: readonly ComparisonTarget[] = [
       "New “Save 10%” ribbon added to the card",
     ],
     expectedOutcome: "Expect a regression well above the 0.1% default tolerance.",
-    modes: ["fixture", "baseline"],
+    // `capture` is available here too, so the demo fixtures exercise the same
+    // single-screenshot path a registered project route uses.
+    modes: ["fixture", "baseline", "capture"],
     defaultMode: "fixture",
     variants: [SHIPPED_VARIANT, REVERTED_VARIANT],
     defaultVariantId: SHIPPED_VARIANT.id,
@@ -116,7 +118,7 @@ export const COMPARISON_TARGETS: readonly ComparisonTarget[] = [
     current: { path: "/demo/baseline", label: "Baseline · v1" },
     expectedChanges: [],
     expectedOutcome: "Expect exactly 0 changed pixels and a passing verdict.",
-    modes: ["fixture"],
+    modes: ["fixture", "capture"],
     defaultMode: "fixture",
   },
 ];

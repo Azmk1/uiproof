@@ -5,7 +5,7 @@ import { startE2eServer } from "./e2e-server";
  * against a throwaway data directory and stopped again when the run finishes.
  */
 export default async function setup(): Promise<() => Promise<void>> {
-  const { runtime, stop } = await startE2eServer();
+  const { runtime, stop } = await startE2eServer({ label: "UIProof", writeRuntimeFile: true });
   // Workers are forked after this returns, so the environment is inherited; the runtime
   // file is the fallback for workers that start without it.
   process.env.UIPROOF_E2E_URL = runtime.url;

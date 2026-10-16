@@ -2,16 +2,24 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   baselineImageUrl,
+  baselineScopeKey,
   isValidBaselineVersionFileName,
   isValidBaselineVersionId,
+  parseBaselineScope,
+  parseBaselineScopeKey,
   resolveBaselineDir,
   resolveBaselineManifestPath,
   resolveBaselineVersionPath,
   versionFileName,
 } from "./baseline-paths";
+import { COMPARISON_TARGETS } from "./targets";
+import type { BaselineScope } from "./types";
 
 const CWD = path.join("tmp", "uiproof-baseline-paths");
 const VERSION_ID = "bl-8f0c1d2e-3a4b-4c5d-8e9f-0123456789ab";
+
+const INVOICE: BaselineScope = { kind: "demo", targetId: "invoice-summary" };
+const EXAMPLE_HOME: BaselineScope = { kind: "project", projectId: "example-app", routeId: "home" };
 
 describe("baseline version ids", () => {
   it("accepts only ids this codebase generates", () => {
@@ -45,35 +53,92 @@ describe("baseline version ids", () => {
 });
 
 describe("baseline directories", () => {
-  it("places a pair inside the data directory", () => {
-    const dir = resolveBaselineDir("invoice-summary", "desktop", CWD);
+  it("keeps the demo layout exactly as Phase 2 wrote it", () => {
+    const dir = resolveBaselineDir(INVOICE, "desktop", CWD);
     expect(dir.endsWith(path.join(".uiproof", "data", "baselines", "invoice-summary", "desktop"))).toBe(true);
     expect(dir.startsWith(path.resolve(CWD))).toBe(true);
   });
 
-  it("refuses unknown targets and viewports, so they can never become paths", () => {
-    expect(() => resolveBaselineDir("../../etc", "desktop", CWD)).toThrow(RangeError);
-    expect(() => resolveBaselineDir("invoice-summary", "../../etc", CWD)).toThrow(RangeError);
-    expect(() => resolveBaselineDir("unknown-target", "desktop", CWD)).toThrow(RangeError);
-    expect(() => resolveBaselineDir("invoice-summary", "watch", CWD)).toThrow(RangeError);
-    expect(() => resolveBaselineManifestPath("invoice-summary", "nope", CWD)).toThrow(RangeError);
+  it("namespaces project baselines under projects/", () => {
+    const dir = resolveBaselineDir(EXAMPLE_HOME, "desktop", CWD);
+    expect(dir.endsWith(path.join(".uiproof", "data", "baselines", "projects", "example-app", "home", "desktop"))).toBe(
+      true,
+    );
+    // A project id can never resolve into the demo namespace, or the other way round.
+    const projectAsDemo = resolveBaselineDir({ kind: "project", projectId: "example-app", routeId: "home" }, "desktop", CWD);
+    expect(path.relative(path.resolve(CWD), projectAsDemo).startsWith(path.join(".uiproof", "data", "baselines", "projects"))).toBe(
+      true,
+    );
   });
 
-  it("keeps the manifest and version files inside the pair directory", () => {
-    const dir = path.resolve(resolveBaselineDir("invoice-summary", "mobile", CWD));
-    expect(resolveBaselineManifestPath("invoice-summary", "mobile", CWD)).toBe(path.join(dir, "manifest.json"));
-    expect(resolveBaselineVersionPath("invoice-summary", "mobile", VERSION_ID, CWD)).toBe(
+  it("reserves the projects namespace, so no demo target can collide with it", () => {
+    expect(COMPARISON_TARGETS.map((target) => target.id)).not.toContain("projects");
+  });
+
+  it("refuses unknown scopes and viewports, so they can never become paths", () => {
+    for (const scope of [
+      { kind: "demo", targetId: "../../etc" },
+      { kind: "demo", targetId: "unknown-target" },
+      { kind: "demo", targetId: "projects" },
+      { kind: "project", projectId: "../../etc", routeId: "home" },
+      { kind: "project", projectId: "Example-App", routeId: "home" },
+      { kind: "project", projectId: "example-app", routeId: "../home" },
+      { kind: "project", projectId: "example-app", routeId: "home/../.." },
+      { kind: "project", projectId: "", routeId: "" },
+      { kind: "something-else", targetId: "invoice-summary" },
+      null,
+    ]) {
+      expect(() => resolveBaselineDir(scope, "desktop", CWD), JSON.stringify(scope)).toThrow(RangeError);
+    }
+    expect(() => resolveBaselineDir(INVOICE, "../../etc", CWD)).toThrow(RangeError);
+    expect(() => resolveBaselineDir(INVOICE, "watch", CWD)).toThrow(RangeError);
+    expect(() => resolveBaselineManifestPath(INVOICE, "nope", CWD)).toThrow(RangeError);
+  });
+
+  it("keeps the manifest and version files inside the scope directory", () => {
+    const dir = path.resolve(resolveBaselineDir(INVOICE, "mobile", CWD));
+    expect(resolveBaselineManifestPath(INVOICE, "mobile", CWD)).toBe(path.join(dir, "manifest.json"));
+    expect(resolveBaselineVersionPath(INVOICE, "mobile", VERSION_ID, CWD)).toBe(
       path.join(dir, "versions", `${VERSION_ID}.png`),
     );
-    expect(() => resolveBaselineVersionPath("invoice-summary", "mobile", "../../secret.png", CWD)).toThrow(RangeError);
-    expect(() => resolveBaselineVersionPath("../../etc", "mobile", VERSION_ID, CWD)).toThrow(RangeError);
+    expect(() => resolveBaselineVersionPath(INVOICE, "mobile", "../../secret.png", CWD)).toThrow(RangeError);
+
+    const projectDir = path.resolve(resolveBaselineDir(EXAMPLE_HOME, "mobile", CWD));
+    expect(resolveBaselineVersionPath(EXAMPLE_HOME, "mobile", VERSION_ID, CWD)).toBe(
+      path.join(projectDir, "versions", `${VERSION_ID}.png`),
+    );
+  });
+});
+
+describe("baseline scope keys", () => {
+  it("round-trips demo and project scopes", () => {
+    expect(baselineScopeKey(INVOICE)).toBe("demo:invoice-summary");
+    expect(baselineScopeKey(EXAMPLE_HOME)).toBe("project:example-app/home");
+    expect(parseBaselineScopeKey("demo:invoice-summary")).toEqual(INVOICE);
+    expect(parseBaselineScopeKey("project:example-app/home")).toEqual(EXAMPLE_HOME);
+  });
+
+  it("refuses malformed keys instead of guessing", () => {
+    for (const key of ["invoice-summary", "demo:../../etc", "project:example-app", "project:/home", "", 42, null]) {
+      expect(() => parseBaselineScopeKey(key), String(key)).toThrow(RangeError);
+    }
+  });
+
+  it("validates raw scope objects", () => {
+    expect(parseBaselineScope(INVOICE)).toEqual(INVOICE);
+    expect(parseBaselineScope(EXAMPLE_HOME)).toEqual(EXAMPLE_HOME);
+    expect(() => parseBaselineScope({ kind: "demo" })).toThrow(RangeError);
+    expect(() => parseBaselineScope("demo:invoice-summary")).toThrow(RangeError);
   });
 });
 
 describe("baselineImageUrl", () => {
-  it("builds the application-relative image URL", () => {
-    expect(baselineImageUrl("invoice-summary", "desktop", VERSION_ID)).toBe(
+  it("builds the application-relative image URL for both namespaces", () => {
+    expect(baselineImageUrl(INVOICE, "desktop", VERSION_ID)).toBe(
       `/api/baselines/invoice-summary/desktop/${VERSION_ID}.png`,
+    );
+    expect(baselineImageUrl(EXAMPLE_HOME, "desktop", VERSION_ID)).toBe(
+      `/api/baselines/projects/example-app/home/desktop/${VERSION_ID}.png`,
     );
   });
 });

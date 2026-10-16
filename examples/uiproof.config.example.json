@@ -1,0 +1,16 @@
+{
+  "projects": [
+    {
+      "id": "example-app",
+      "name": "Example app",
+      "origin": "http://127.0.0.1:4173",
+      "routes": [
+        { "id": "home", "name": "Overview", "path": "/" },
+        { "id": "settings", "name": "Settings", "path": "/settings" },
+        { "id": "pricing", "name": "Pricing", "path": "/pricing" },
+        { "id": "moved", "name": "Redirects away (capture must be refused)", "path": "/moved" }
+      ],
+      "allowedOrigins": []
+    }
+  ]
+}

@@ -25,10 +25,11 @@ export const ARTIFACT_URL_SEGMENT = "/api/artifacts";
 
 const MAX_SCANNED_RUNS = 200;
 
+/** Only the artifacts a run actually produced are written and referenced. */
 export interface RunArtifacts {
-  readonly baselinePng: Buffer;
   readonly currentPng: Buffer;
-  readonly diffPng: Buffer;
+  readonly baselinePng?: Buffer;
+  readonly diffPng?: Buffer;
 }
 
 export function artifactUrl(reportId: string, fileName: string): string {
@@ -37,18 +38,34 @@ export function artifactUrl(reportId: string, fileName: string): string {
 
 export async function persistRun(report: ComparisonReport, artifacts: RunArtifacts): Promise<void> {
   const directory = resolveReportDir(report.id);
+  // Build the list of files first and only start writing after the directory exists:
+  // creating the write promises up front lets them race `mkdir` and fail with ENOENT on a
+  // data directory that has never stored a run.
+  const files: Array<[string, Buffer | string, BufferEncoding | undefined]> = [
+    [ARTIFACT_FILENAMES.current, artifacts.currentPng, undefined],
+    [REPORT_FILENAME, `${JSON.stringify(report, null, 2)}\n`, "utf8"],
+  ];
+  if (artifacts.baselinePng) files.push([ARTIFACT_FILENAMES.baseline, artifacts.baselinePng, undefined]);
+  if (artifacts.diffPng) files.push([ARTIFACT_FILENAMES.diff, artifacts.diffPng, undefined]);
+
   try {
     await mkdir(directory, { recursive: true });
-    await Promise.all([
-      writeFile(path.join(directory, ARTIFACT_FILENAMES.baseline), artifacts.baselinePng),
-      writeFile(path.join(directory, ARTIFACT_FILENAMES.current), artifacts.currentPng),
-      writeFile(path.join(directory, ARTIFACT_FILENAMES.diff), artifacts.diffPng),
-      writeFile(path.join(directory, REPORT_FILENAME), `${JSON.stringify(report, null, 2)}\n`, "utf8"),
-    ]);
+    await Promise.all(files.map(([name, data, encoding]) => writeFile(path.join(directory, name), data, encoding)));
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     throw new ComparisonError("storage_failed", `Could not persist the run: ${message}`, { cause });
   }
+}
+
+/** The scope key of a report, derived from its source when it has one. */
+export function scopeKeyOf(report: ComparisonReport): string {
+  if (report.source?.scopeKey) return report.source.scopeKey;
+  return `demo:${report.target.id}`;
+}
+
+/** The source kind of a report, defaulting to demo for pre-Phase-3 reports. */
+export function sourceKindOf(report: ComparisonReport): "demo" | "project" {
+  return report.source?.kind ?? "demo";
 }
 
 function toSummary(report: ComparisonReport): ReportSummary {
@@ -58,10 +75,12 @@ function toSummary(report: ComparisonReport): ReportSummary {
     status: report.status,
     targetId: report.target.id,
     targetLabel: report.target.label,
+    scopeKey: scopeKeyOf(report),
+    kind: sourceKindOf(report),
     viewportId: report.viewport.id,
     viewportLabel: report.viewport.label,
     // Reports written before Phase 2 have no mode; they were all fixture comparisons.
-    mode: report.mode === "baseline" ? "baseline" : "fixture",
+    mode: report.mode ?? "fixture",
     variantId: report.variantId ?? null,
     changePercentage: report.metrics.changePercentage,
   };

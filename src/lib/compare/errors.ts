@@ -16,8 +16,14 @@ export type ComparisonErrorCode =
   | "baseline_conflict"
   | "browser_unavailable"
   | "capture_failed"
+  | "capture_redirected"
   | "comparison_failed"
-  | "storage_failed";
+  | "storage_failed"
+  // Phase 3: registered local applications.
+  | "project_not_registered"
+  | "route_not_registered"
+  | "project_config_invalid"
+  | "project_unreachable";
 
 const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   invalid_target: 400,
@@ -35,8 +41,13 @@ const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   baseline_conflict: 409,
   browser_unavailable: 503,
   capture_failed: 502,
+  capture_redirected: 502,
   comparison_failed: 500,
   storage_failed: 500,
+  project_not_registered: 400,
+  route_not_registered: 400,
+  project_config_invalid: 500,
+  project_unreachable: 502,
 };
 
 export class ComparisonError extends Error {
