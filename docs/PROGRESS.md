@@ -3,11 +3,11 @@
 **North star:** an automated frontend quality platform that detects visual regressions,
 accessibility problems and design inconsistencies — see `docs/GOAL.md`.
 
-**Current milestone:** Phase 4 — CLI, portable baselines and CI quality gates.
+**Current milestone:** Phase 4.5 — trusted baselines and genuine CI enforcement.
 **Status:** complete, verified, committed.
 
 Phase 1 = 8 / 8 criteria (100 %) · Phase 2 = 10 / 10 criteria (100 %) · Phase 3 =
-12 / 12 criteria (100 %) · Phase 4 = **12 / 12 criteria (100 %)**.
+12 / 12 criteria (100 %) · Phase 4 = 12 / 12 criteria (100 %) · Phase 4.5 = **7 / 7 criteria (100 %)**.
 
 ---
 
@@ -339,6 +339,9 @@ URLs and without an authentication system (the brief ruled one out unless it was
 
 ## Phase 4 — the CLI, portable baselines and a CI gate
 
+> Superseded in part by Phase 4.5: the workflow described below approved its own reference on the
+> runner, which is exactly what Phase 4.5 removed. Read the Phase 4.5 section for the current gate.
+
 **Goal:** turn UIProof from a console you watch into a tool a pipeline can gate on. Run it from a
 terminal without the dashboard, get a documented exit code, and carry an approved baseline to a clean
 CI runner as a committable artifact.
@@ -409,6 +412,78 @@ pnpm test:e2e    46 tests / 5 files passed     (was 33 / 4; cli.test.ts: 13 test
 
 ---
 
+## Phase 4.5 — trusted baselines and genuine CI enforcement
+
+**Goal:** make the visual-regression workflow able to actually stop an unapproved visual change
+from merging. It could not, because of the defect this phase exists to remove: the "gate" imported a
+committed baseline and then ran `capture --approve` on the application under test immediately before
+checking it. Broken code could be approved seconds before it was measured, in the same job, and the
+job would report a passing comparison. That is a demonstration of the CLI, not a gate.
+
+### Acceptance criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | **Reproducible Linux/Chromium environment**: pinned browser/runtime container, pinned fonts, viewport, device scale factor, locale, and honest documentation of what is *not* deterministic | **Verified** | `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a…` — pinned by tag *and* digest — is the `container:` of all three workflows and the image `scripts/ci/in-container.sh` reproduces locally; `playwright` is an exact dependency (no caret); Chromium build 1248, Node 24.21.0 and `fc-match system-ui` → *WenQuanYi Zen Hei* are recorded in every provenance record. What stays unpinned (another architecture, another digest, a page with live data) is written down in `docs/BASELINE-UPDATES.md` |
+| 2 | **Trusted baseline generated in that environment**, exported with its SHA-256 metadata, committed, with a separate documented update process | **Verified** | `scripts/ci/generate-baseline.sh` captures → approves → exports inside the image; the committed bundle is the container-rendered one (`bl-c6198d4d…`, `sha256:28399ef6…c530e1`, 70,020 bytes, 1280 × 800). Updates go through `baseline-update.yml` (`workflow_dispatch` only, uploads an artifact, **commits nothing**) and `docs/BASELINE-UPDATES.md` |
+| 3 | **The gate compares the pull request's code with the base branch's approved baseline**, no capture/approve during a check, `0` passes, `1` fails the job, `2` fails the job, artifacts uploaded either way, and a pull request cannot authorise its own change | **Verified** | `scripts/ci/trusted-baseline.sh` extracts the bundle from `github.event.pull_request.base.ref` with `git archive`; `run-gate.sh` imports/activates it, refuses to continue if the active version is not the trusted one, and exits with the comparison's own code. Links and numbers below |
+| 4 | **Demonstration workflow preserved and clearly separated** | **Verified** | `.github/workflows/visual-regression-demo.yml` (named *walkthrough*, runs on `main`/manual) asserts each documented exit code, which is the opposite of a gate; the gate asserts nothing and simply fails |
+| 5 | **Security appropriate to untrusted pull-request code** | **Verified** | `permissions: contents: read`; no secret referenced; the application under test is started with `env -i` (PATH/HOME/LANG/TZ/HOST/PORT only); nothing commits or approves; the CLI's loopback + registered-route surface is unchanged |
+| 6 | **Six scenarios demonstrated with real screenshots** | **Verified** | 17/17 assertions in the walkthrough, seven scenarios, on Linux: `0` unchanged, `1` changed, **`1` with a rewritten bundle**, `0` restored, `2 baseline_not_found`, `2 baseline_integrity_failed` (with both hashes named), `2 project_unreachable` |
+| 7 | **Existing functionality preserved; lint, typecheck, unit, browser, build and the real gate all run** | **Verified** | 177 → **188** unit tests (11 new, in `src/lib/ci/pinned-environment.test.ts`), 46 browser tests, production build, and all three workflows green on `main` |
+
+### Milestone log
+
+| Milestone | Outcome |
+|-----------|---------|
+| M28 — pinned environment | Exact Playwright pin, image tag + digest, local reproduction wrapper (`scripts/ci/in-container.sh`), and the drift guard that fails `pnpm test` when the pin, the image or the Chromium revision stop agreeing |
+| M29 — the scripts the workflows run | `lib.sh` (configuration, scrubbed app start, health wait, exit-code capture), `trusted-baseline.sh` (extract from a commit + verify every image against the manifest), `run-gate.sh` (load, verify the reference, check, report, exit with the CLI's code), `generate-baseline.sh` (capture → approve → export + provenance), `walkthrough.sh` (seven scenarios), `in-container.sh` |
+| M30 — the gate | `visual-regression.yml` rewritten: base-branch extraction, `contents: read`, no capture, no approval, artifacts on success *and* failure, step summary |
+| M31 — the demonstration | The old workflow split in two: the walkthrough above, and the reviewed `baseline-update.yml` that approves but never commits |
+| M32 — the trusted baseline | Three container-rendered generations, byte-identical; the bundle replaced the Windows-rendered one deliberately (`git rm` + add, reviewed as one commit); `.gitattributes` pins the rendered app's line endings |
+| M33 — proof on a real pull request | PR #1: a real UI change → gate fails; the same PR plus a bundle that matches its own UI → still fails; UI reverted → passes with the PR's bundle still in place |
+| M34 — verification | Local container runs, GitHub runs, artifacts, docs |
+
+### Phase 4.5 verification evidence
+
+```
+pnpm lint        clean
+pnpm typecheck   clean
+pnpm test        188 tests / 16 files passed   (was 177 / 15)
+pnpm build       ✓ compiled
+pnpm test:e2e    46 tests / 5 files passed
+```
+
+| Check | Result |
+|-------|--------|
+| Reproducibility of the reference | Three separate `generate-baseline.sh` runs in the pinned image — one of them from a CRLF checkout — produced the **same** screenshot: `sha256:28399ef61ab1a1e8fe14d462cf6f42fc01d4657214b87009c67a04ac1cc530e1`, 70,020 bytes, 1280 × 800 |
+| Gate, locally, in the image | Untouched application → `ok the run used the trusted reference bl-c6198d4d…`, `changed: 0% of the viewport`, `exit 0` |
+| Walkthrough, locally | 17/17 assertions matched, seven scenarios, exit `0` |
+| Gate on `main` | [run 38844220690](https://github.com/Azmk1/uiproof/actions/runs/38844220690) — **success**, `exit 0`, `changed: 0%`, trusted bundle from commit `df1312a`, `working tree copy: identical to the trusted bundle` |
+| Walkthrough on `main` | [run 38844220574](https://github.com/Azmk1/uiproof/actions/runs/38844220574) — **success**, 17/17, including the gate ignoring a rewritten bundle and `baseline_integrity_failed` naming both hashes |
+| Project CI on `main` | [run 38844220557](https://github.com/Azmk1/uiproof/actions/runs/38844220557) — **success**: lint, typecheck, 188 unit tests, production build, 46 browser tests on Linux |
+| Real UI change in a pull request | [PR #1 / run 38844548795](https://github.com/Azmk1/uiproof/actions/runs/38844548795) — the gate step **fails**: `REGRESSION 0.4404% of the viewport changed (4,510 of 1,024,000 px), above the 0.1% tolerance`, against `bl-c6198d4d…`; the upload step still succeeds |
+| A pull request that approves its own change | [PR #1 / run 38844710523](https://github.com/Azmk1/uiproof/actions/runs/38844710523) — the PR ships a bundle *matching* its changed UI; the gate logs `the working tree copy … DIFFERS from the trusted bundle; this check ignores it`, compares against the base commit anyway, and **fails**: `exit 1` |
+| The same approval, loaded against its own UI | Locally in the image: `PASS 0% of the viewport changed (0 of 1,024,000 px)`, `exit 0` — the approval was legitimate and pixel-exact, and the gate rejected the change regardless |
+| UI reverted, bundle still in the pull request | [PR #1 / run 38844877047](https://github.com/Azmk1/uiproof/actions/runs/38844877047) — **success**, `exit 0`, `changed: 0%`, with the same warning about the differing bundle |
+
+**Defects found and fixed during Phase 4.5:**
+
+1. **The gate approved what it was about to test** (above). No capture and no approval exists in the
+   gate now, and a unit test asserts the workflow contains neither.
+2. **GitHub rejected all three new workflows outright** — `runner` is not a context a workflow-level
+   `env:` may use, so no job ran on any trigger. Found from the run's annotation, fixed by building
+   the paths from `$RUNNER_TEMP` inside the steps, and guarded by a test that reads the restricted
+   `env:` blocks (verified by injecting the mistake and watching the test fail).
+3. **Container jobs cannot read their own workspace with git.** Running as root over a runner-owned
+   checkout is "detected dubious ownership"; both workflows stopped at their first `git` command.
+   The workspace is now named in git's environment configuration for those processes only.
+4. **The host's `core.autocrlf` made the container believe the application was modified.** Chasing it
+   produced a real answer rather than a workaround: an LF and a CRLF checkout render the same 70,020
+   bytes, and `.gitattributes` now pins the rendered application to LF so the question cannot come back.
+
+---
+
 ## Decisions made during implementation
 
 - **Route groups** `(console)` / `(fixtures)` keep console chrome off the screens under test.
@@ -448,13 +523,20 @@ pnpm test:e2e    46 tests / 5 files passed     (was 33 / 4; cli.test.ts: 13 test
   rather than captured.
 - The CLI runs from this repository (the package is still `private`); a consumer needs the checkout,
   and `pnpm uiproof` rebuilds the git-ignored bundle when a source file changes.
-- An approved baseline is only pixel-exact for the environment that rendered it. The committed example
-  bundle was approved on Windows, so the CI example uses it to prove the portable path and approves
-  its own reference on the runner; a team that wants one image to gate several machines should generate
-  it in the environment that gates.
-- The example workflow gates one route at one viewport, and its gate reference is approved on the
-  runner (see the rendering-environment item above), so a green run proves the pipeline and this
-  repository's example, not that a baseline approved elsewhere will match pixel-for-pixel.
+- An approved baseline is only pixel-exact for the environment that rendered it. The committed
+  example bundle is now rendered by the pinned image the gate runs in, and three independent runs
+  produced identical bytes — but a different image digest, a different architecture or a page with
+  live data still moves pixels, so a changed digest means "regenerate the baseline", not "the
+  baseline is wrong".
+- **The gate blocks only if the repository is configured to block.** A workflow cannot protect
+  itself: requiring the `gate · trusted baseline` check, requiring review from code owners, requiring
+  branches to be up to date and restricting pushes to the base branch are manual settings, listed in
+  `docs/BASELINE-UPDATES.md`. Without them the gate is a signal, not a gate.
+- The gate checks one project route at one viewport per invocation; more routes are a loop over
+  `run-gate.sh` in the consumer's workflow.
+- The walkthrough edits the application's view and the repository's bundle inside the runner's
+  checkout to make its points, and restores both; a final step fails the job if the checkout is not
+  clean afterwards. It is therefore unsuitable to run against pull requests, and does not.
 - `capture` and `check` cover registered routes only; multi-route or multi-viewport gating is a loop in
   the consumer's pipeline, and there is no watch mode. Bundles may carry demo scopes, but the CLI cannot
   capture a demo fixture.
@@ -465,14 +547,22 @@ pnpm test:e2e    46 tests / 5 files passed     (was 33 / 4; cli.test.ts: 13 test
 
 ## Blockers
 
-None outstanding.
+None outstanding. One item needs a human: the branch-protection settings that make the gate blocking
+(required status check `gate · trusted baseline`, required code-owner review, up-to-date branches,
+restricted pushes to the base branch) are repository settings GitHub does not let a workflow set. They
+are listed in `docs/BASELINE-UPDATES.md`.
 
 ## Next approved action
 
-Phase 4 is delivered and verified on `main`: `pnpm uiproof` runs the engine without the dashboard,
-separates "your UI changed" (`1`) from "the tool could not answer" (`2`), exports and imports
-integrity-checked baseline bundles, and the example workflow loads an approved baseline on a clean
-runner and demonstrates both a passing and a failing comparison. The recommended next milestone is
+Phase 4.5 is delivered and verified on `main`: the visual-regression workflow is a real gate — the
+reference comes from the pull request's base branch, nothing in it captures or approves anything, the
+comparison's exit code decides the job, and the whole job runs in one pinned container image so the
+committed baseline and the runner's screenshot are comparable. A pull request with a real UI change
+fails it; the same pull request shipping an approval of its own change still fails; reverting the UI
+passes. The recommended next milestone is
 **Phase 5 — make the gate sharper, and cheaper to run everywhere**: ignore regions recorded in the
 report, a git SHA per run, `uiproof check --all` across a whole project, a published CLI package, and
-multi-viewport approvals. Details at the end of the README.
+multi-viewport approvals. Two smaller items belong with it: an automated check that the manual branch
+protection settings in `docs/BASELINE-UPDATES.md` are actually configured, and a scheduled
+regeneration probe that fails when a new image digest changes rendering rather than letting it surface
+as a mystery regression. Details at the end of the README.

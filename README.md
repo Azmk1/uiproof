@@ -12,9 +12,12 @@ running on this machine**, pick one of its routes, capture it, approve it, and e
 that route is drift-checked against your approved screen. Captures stay inside the origins you
 registered. Phase 4 makes it a tool you can gate on: a **CLI with documented exit codes**, `0` pass /
 `1` regression / `2` the tool could not answer, and **portable approved baselines** — bundles you
-commit next to your code and a clean CI runner can load and compare against. Later phases add
-accessibility and design-consistency checks, GitHub integration, and AI-assisted repair proposals —
-none of that is wired up yet.
+commit next to your code and a clean CI runner can load and compare against. Phase 4.5 makes that
+gate trustworthy: the reference comes from the pull request's **base branch** rather than from the
+pull request itself, nothing in the gate ever **captures or approves** anything, and the whole job
+runs in one **pinned container image** so the committed baseline and the runner's screenshot are
+comparable. Later phases add accessibility and design-consistency checks, GitHub integration, and
+AI-assisted repair proposals — none of that is wired up yet.
 
 ---
 
@@ -49,6 +52,11 @@ none of that is wired up yet.
 - **Portable, integrity-checked baselines.** `baselines export` writes a bundle you can commit;
   `baselines import --activate` loads it on a machine that has never seen UIProof, verifying every
   image against its recorded SHA-256, byte count and dimensions first.
+- **A CI gate that can actually fail.** [.github/workflows/visual-regression.yml](.github/workflows/visual-regression.yml)
+  compares a pull request's code against the approved bundle committed on its base branch, inside the
+  pinned rendering image, and lets the comparison's own exit code fail the job. It never captures and
+  never approves — a job that approves the page it is about to test cannot fail. The pass →
+  regression → restore walkthrough is a separate workflow, labelled as the demonstration it is.
 - **A deliberately closed capture surface.** The engine only ever navigates to compiled demo routes
   or to routes named in the registration file, on the loopback origins that file declares. A browser
   request cannot name a URL: it sends a project id and a route id, and the server resolves them
@@ -580,32 +588,45 @@ enforces, each of them unit tested against hand-edited manifests:
 
 ### Gating a CI pipeline
 
-[.github/workflows/visual-regression.yml](.github/workflows/visual-regression.yml) is a working
-example for a clean Ubuntu runner with no pre-existing UIProof data: install, `playwright install
-chromium`, start [examples/example-app](examples/example-app) and wait for `/healthz`, import
-[examples/uiproof-baselines](examples/uiproof-baselines), gate, and upload the reports, the run's JSON
-and the bundle as build artifacts. It never needs a paid API, a model or a hosted backend.
+[.github/workflows/visual-regression.yml](.github/workflows/visual-regression.yml) is a working gate
+for a clean Ubuntu runner: `pull_request` and `push` to `main`, `contents: read`, no secrets, no
+hosted service. It starts the application under test, loads the approved baseline, and runs one
+comparison whose exit code *is* the job's verdict. Four things make it a gate rather than a
+demonstration:
 
-Verified on GitHub Actions: run 1 on `3ad6b88` passed on `ubuntu-latest` in 44 s and uploaded the
-reports, the failing run's JSON, the exported bundle and the application log as the
-`uiproof-visual-regression` artifact; `ci.yml` on the same commit passed too, which means the whole
-browser suite — including the 13 CLI tests — is green on Linux as well as on the machine it was
-written on.
+- **The reference comes from a commit the pull request cannot write to.** The bundle is extracted
+  from the pull request's base branch with `git archive`, so editing
+  [examples/uiproof-baselines](examples/uiproof-baselines) in the same pull request cannot authorise
+  that pull request's change. The working-tree copy is compared, reported, and then ignored.
+- **Nothing captures and nothing approves.** There is no `capture` and no `--approve` in the gate —
+  a unit test asserts exactly that, because the defect this workflow used to have was approving the
+  page it was about to test, which cannot fail.
+- **A regression fails the job.** Exit `1` (a real visual difference) and exit `2` (missing baseline,
+  tampered image, unreachable application, browser or configuration problem) both fail it, and the
+  screenshots, the diff and the run's JSON are uploaded either way so a regression is reviewable.
+- **The environment is pinned.** The whole job runs in
+  `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a…`, because a baseline only matches a
+  screenshot taken by the same Chromium with the same fonts.
 
-The two comparisons the brief asks for are both there:
+Verified on GitHub Actions (links in [docs/BASELINE-UPDATES.md](docs/BASELINE-UPDATES.md#verified)):
+`main` passes with `exit 0` and `changed: 0%` against the committed reference; a pull request with
+three real edits to the example application's own view fails the gate with `exit 1` and **0.4404 %**
+of the viewport changed, artifacts included; the *same* pull request shipping a bundle that matches
+its own UI — an approval verified pixel-exact (`PASS 0% of the viewport changed`) when loaded against
+that UI — still fails, because the reference comes from the base branch; and reverting the UI passes
+again while the pull request keeps its own bundle.
 
-- **the unchanged page passes** — `uiproof check` exits `0`;
-- **a real UI change fails the job** — `views/home.changed.html` is copied over `views/home.html`, the
-  same command exits `1`, the view is restored, and the next run exits `0` again.
+[.github/workflows/visual-regression-demo.yml](.github/workflows/visual-regression-demo.yml) is the
+Phase 4 walkthrough, kept as an integration test and clearly separated from the gate: it asserts each
+documented exit code — `0` unchanged, `1` changed, `0` restored, `2` missing baseline, `2` tampered
+image, `2` unreachable application — which is precisely what a gate must never do. It runs on `main`
+and by hand, in the same pinned image, and its last step fails if it left the checkout dirty.
 
-**One honest caveat, and the strategy it implies.** A baseline is a screenshot, so it only matches
-pixel-for-pixel in the environment that rendered it: the committed example bundle was approved on
-Windows, and a Linux runner resolves the example application's `system-ui` font stack to a different
-face. The workflow therefore uses the committed bundle to prove the portable path on a clean machine
-(it imports, verifies and reports), and produces the reference its own gate is measured against with
-`capture --approve` on the runner. When one image has to gate several machines, generate it in the
-environment that gates — the same container image, ideally — and commit that artifact; the workflow's
-last step exports the runner-approved bundle for exactly that handoff.
+Updating the baseline is its own reviewed procedure: dispatch
+[the update workflow](.github/workflows/baseline-update.yml), review the artifact and its provenance,
+commit the bundle. It cannot be reached from a pull request and it never commits anything itself.
+[docs/BASELINE-UPDATES.md](docs/BASELINE-UPDATES.md) documents all of it, including the
+branch-protection settings that turn the gate from a signal into a block, and what is not pinned.
 
 ---
 
@@ -626,6 +647,22 @@ described below, one run reported 39,333 instead of 39,334 — a single pixel, b
 own text colours had changed. That is the tool correctly noticing a real change, not noise to be
 papered over. If a page genuinely cannot be stabilised (live animations, remote fonts, time-dependent
 content), raise the tolerance or exclude the region deliberately — never fake the number.
+
+### The environment a baseline comes from
+
+Pinning the capture is not enough. A screenshot also depends on the browser build and the fonts, so
+the gate, the walkthrough and the baseline generator all run in **one container image**, pinned by
+tag and digest (`mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a…`; Playwright 1.64.1,
+Chromium build 1248, and whatever fontconfig is inside it — `system-ui` resolves to *WenQuanYi Zen
+Hei* there, which is why a Windows-rendered baseline could never match a Linux runner). The
+generator records all of that in its provenance, and the same image is what the gate runs in.
+
+Measured, not asserted: **three separate generator runs** in that image — one of them from a CRLF
+checkout — produced byte-identical screenshots (`sha256:28399ef6…c530e1`, 70,020 bytes, 1280 × 800).
+What that does *not* cover is worth writing down too: another architecture, another image digest, or
+a page with live data still moves pixels, so a changed digest means "regenerate the baseline", not
+"the baseline is wrong". `pnpm test` fails if the pins drift apart
+([src/lib/ci/pinned-environment.test.ts](src/lib/ci/pinned-environment.test.ts)).
 
 ---
 
