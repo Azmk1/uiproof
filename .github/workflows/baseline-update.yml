@@ -50,7 +50,8 @@ env:
   UIPROOF_CONFIG: examples/ci/uiproof.config.json
   UIPROOF_PROJECT: example-app
   UIPROOF_ROUTE: home
-  WORK: ${{ runner.temp }}/uiproof/baseline-update
+  # The working directory is built from `$RUNNER_TEMP` inside the steps: `runner` is not a
+  # context a workflow-level `env` may use.
 
 defaults:
   run:
@@ -84,6 +85,7 @@ jobs:
           NOTE: ${{ inputs.note }}
           VIEWPORT: ${{ inputs.viewport }}
         run: |
+          WORK="${RUNNER_TEMP}/uiproof/baseline-update"
           bash scripts/ci/generate-baseline.sh \
             --out "$WORK/bundle" \
             --artifacts "$WORK/artifacts" \
@@ -96,6 +98,7 @@ jobs:
       - name: Describe the approval for review
         if: always()
         run: |
+          WORK="${RUNNER_TEMP}/uiproof/baseline-update"
           if [ ! -f "$WORK/artifacts/provenance.txt" ]; then
             exit 0
           fi
@@ -117,6 +120,6 @@ jobs:
         with:
           name: approved-baseline
           path: |
-            ${{ env.WORK }}
+            ${{ runner.temp }}/uiproof/baseline-update
           if-no-files-found: warn
           retention-days: 30

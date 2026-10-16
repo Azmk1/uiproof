@@ -32,6 +32,9 @@ UIPROOF_IMAGE="mcr.microsoft.com/playwright:${UIPROOF_IMAGE_TAG}@${UIPROOF_IMAGE
 # The Chromium revision the image ships, recorded in provenance. The unit test checks it
 # against the revision Playwright pins for the version in package.json.
 UIPROOF_CHROMIUM_REVISION="1248"
+# Exported so that the processes these scripts start can record which environment they ran in
+# (the gate's summary JSON carries it, for example) without being passed it argument by argument.
+export UIPROOF_IMAGE UIPROOF_IMAGE_TAG UIPROOF_IMAGE_DIGEST UIPROOF_CHROMIUM_REVISION
 
 # ── Defaults for the example application this repository gates ───────────────────────────
 # A developer gates their own application by pointing these at it; nothing below is special

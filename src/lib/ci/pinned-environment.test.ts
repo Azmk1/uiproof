@@ -113,6 +113,46 @@ describe("the pinned rendering environment", () => {
   });
 });
 
+describe("the workflow files are shaped like workflows", () => {
+  /**
+   * GitHub validates a workflow's contexts when it reads the file, and rejects the whole file
+   * (not just the step) when one is used where it is not available. `runner` is only in scope
+   * from a step onwards, so a workflow- or job-level `env:` that reaches for it means every
+   * job in the file silently stops running. There is no YAML parser in this project's
+   * dependencies, so this reads the two `env:` levels that are restricted and nothing else.
+   */
+  const RESTRICTED = /\$\{\{\s*(runner|steps|job)\./;
+
+  function envBlocks(source: string, indent: number): Array<{ line: number; body: string }> {
+    const lines = source.split("\n");
+    const blocks: Array<{ line: number; body: string }> = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index] !== `${" ".repeat(indent)}env:`) continue;
+      const body: string[] = [];
+      for (let next = index + 1; next < lines.length; next += 1) {
+        const line = lines[next];
+        if (line.trim().length === 0) continue;
+        const leading = line.length - line.trimStart().length;
+        if (leading <= indent) break;
+        body.push(line);
+      }
+      blocks.push({ line: index + 1, body: body.join("\n") });
+    }
+    return blocks;
+  }
+
+  it("uses no out-of-scope context in a workflow- or job-level env", () => {
+    for (const name of workflowFiles()) {
+      const source = read(path.join(".github", "workflows", name));
+      for (const { line, body } of [...envBlocks(source, 0), ...envBlocks(source, 4)]) {
+        const match = RESTRICTED.exec(body);
+        const context = match?.[1] ?? "";
+        expect(match?.[1], `${name}:${line} uses the ${context} context in env, which GitHub rejects`).toBeUndefined();
+      }
+    }
+  });
+});
+
 describe("the pull-request gate cannot approve what it is testing", () => {
   function gateWorkflows(): Array<{ name: string; source: string }> {
     return workflowFiles()

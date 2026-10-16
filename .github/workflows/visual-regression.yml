@@ -58,10 +58,10 @@ env:
   UIPROOF_VIEWPORT: desktop
   UIPROOF_BUNDLE_PATH: examples/uiproof-baselines
   # The commit the reference comes from: the pull request's target branch, or the branch this
-  # push landed on. A pull request cannot write to either.
+  # push landed on. A pull request cannot write to either. (The two working directories are
+  # built from `$RUNNER_TEMP` inside the steps below: `runner` is not a context a workflow-level
+  # `env` may use.)
   TRUSTED_REF: ${{ github.event.pull_request.base.ref || github.ref_name }}
-  TRUSTED_DIR: ${{ runner.temp }}/uiproof/trusted-baseline
-  WORK: ${{ runner.temp }}/uiproof/gate
 
 defaults:
   run:
@@ -97,6 +97,8 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
         run: |
+          WORK="${RUNNER_TEMP}/uiproof/gate"
+          TRUSTED_DIR="${RUNNER_TEMP}/uiproof/trusted-baseline"
           echo "base branch: $TRUSTED_REF (pull request base $BASE_SHA)"
           mkdir -p "$WORK"
           git fetch --no-tags --depth=1 origin "$TRUSTED_REF"
@@ -112,8 +114,9 @@ jobs:
         # trusted baseline, compare, report, and exit with the comparison's own code. There is
         # no capture and no approval anywhere in it.
         run: |
+          WORK="${RUNNER_TEMP}/uiproof/gate"
           bash scripts/ci/run-gate.sh \
-            --bundle "$TRUSTED_DIR" \
+            --bundle "${RUNNER_TEMP}/uiproof/trusted-baseline" \
             --store "$WORK/store" \
             --artifacts "$WORK/artifacts" \
             --config "$UIPROOF_CONFIG" \
@@ -129,7 +132,7 @@ jobs:
         with:
           name: uiproof-gate
           path: |
-            ${{ env.WORK }}
-            ${{ env.TRUSTED_DIR }}
+            ${{ runner.temp }}/uiproof/gate
+            ${{ runner.temp }}/uiproof/trusted-baseline
           if-no-files-found: warn
           retention-days: 30

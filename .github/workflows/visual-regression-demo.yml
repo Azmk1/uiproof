@@ -45,8 +45,8 @@ env:
   UIPROOF_ROUTE: home
   UIPROOF_VIEWPORT: desktop
   UIPROOF_BUNDLE_PATH: examples/uiproof-baselines
-  TRUSTED_DIR: ${{ runner.temp }}/uiproof/trusted-baseline
-  WORK: ${{ runner.temp }}/uiproof/walkthrough
+  # The working directories are built from `$RUNNER_TEMP` inside the steps: `runner` is not a
+  # context a workflow-level `env` may use.
 
 defaults:
   run:
@@ -76,18 +76,20 @@ jobs:
       - name: Read the committed approved baseline
         # The same extraction the gate uses, aimed at this commit instead of a base branch.
         run: |
+          WORK="${RUNNER_TEMP}/uiproof/walkthrough"
           mkdir -p "$WORK"
           bash scripts/ci/trusted-baseline.sh \
             --from-ref HEAD \
-            --into "$TRUSTED_DIR" \
+            --into "${RUNNER_TEMP}/uiproof/trusted-baseline" \
             --path "$UIPROOF_BUNDLE_PATH" \
             --provenance "$WORK/trusted-baseline.txt"
 
       - name: Walk through every exit code
         # Exits 1 if any scenario answered something other than what the CLI documents.
         run: |
+          WORK="${RUNNER_TEMP}/uiproof/walkthrough"
           bash scripts/ci/walkthrough.sh \
-            --bundle "$TRUSTED_DIR" \
+            --bundle "${RUNNER_TEMP}/uiproof/trusted-baseline" \
             --trusted-ref HEAD \
             --artifacts "$WORK/artifacts" \
             --stores "$WORK/stores" \
@@ -103,8 +105,8 @@ jobs:
         with:
           name: uiproof-walkthrough
           path: |
-            ${{ env.WORK }}
-            ${{ env.TRUSTED_DIR }}
+            ${{ runner.temp }}/uiproof/walkthrough
+            ${{ runner.temp }}/uiproof/trusted-baseline
           if-no-files-found: warn
           retention-days: 30
 
