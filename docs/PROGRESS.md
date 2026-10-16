@@ -3,10 +3,11 @@
 **North star:** an automated frontend quality platform that detects visual regressions,
 accessibility problems and design inconsistencies — see `docs/GOAL.md`.
 
-**Current milestone:** Phase 2 — approved baselines, drift detection and automated quality gates.
+**Current milestone:** Phase 3 — real application integration and security hardening.
 **Status:** complete, verified, committed.
 
-Phase 1 = 8 / 8 criteria (100 %) · Phase 2 = **10 / 10 criteria (100 %)**.
+Phase 1 = 8 / 8 criteria (100 %) · Phase 2 = 10 / 10 criteria (100 %) · Phase 3 =
+**12 / 12 criteria (100 %)**.
 
 ---
 
@@ -208,6 +209,78 @@ Beyond the automated suite, the running console was inspected in the preview bro
    Stale copy like this is invisible to the engine tests, so the live UI audit looks for it; the badge
    now reads "phase 2".
 
+### Phase 3 verification evidence
+
+```
+pnpm lint        clean
+pnpm typecheck   clean
+pnpm test        155 tests / 13 files passed
+pnpm build       ✓ compiled; 17 routes (demo pages static, every /api route dynamic), no warnings
+pnpm test:e2e    33 tests / 4 files passed (Chromium, real production servers)
+```
+
+The browser suite now runs **four** servers: the Phase 1/2 one on a scratch port, the registered
+project one, and short-lived ones for the unsafe-configuration and unreachable-application probes.
+
+Live measurement of the workflow, production server, example application on its own port:
+
+| Step | Result |
+|------|--------|
+| Capture-only, `/` | `captured`, **0 / 0 px compared**, capture 310 ms, 942 ms end to end, PNG 48,302 bytes |
+| Approve it | `bl-d8fe56c5-2ee8-4492-a3d7-aea0f15c41a4`, route `/`, 1280 × 800, 48,302 bytes — the same bytes as the capture |
+| Baseline run, unchanged | **pass**, 0 / 1,024,000 px = 0 %, 363 ms |
+| The application's own view file replaced | **regression**, 9,945 / 1,024,000 px = **0.97119140625 %**, capture 189 ms, compare 212 ms, diff PNG 67,500 bytes |
+| Diff image decoded independently | Exactly **9,945** pixels of the difference colour `rgb(220, 38, 38)` — metric and picture agree (asserted by the suite on every run) |
+| Original view restored | **pass**, 0 px, 391 ms |
+| `/embedded` (image from another origin) | `captured`, `source.blockedRequests = 1` — refused, counted, page still rendered |
+| Baseline manifest afterwards | **one** version, still active, revision 1 — a regression never approves itself |
+| UIProof restarted on the same data directory | Baseline, its version and all five runs still present; a fresh baseline run still passes at 0 px |
+
+Refusals, all through the real API: unregistered project → `400 project_not_registered`; unknown or
+`../../etc/passwd` route → `400 route_not_registered`; `https://evil.example` target →
+`400 invalid_target`; a registered route that 302s to `https://example.com` →
+`502 capture_redirected` **with the run count unchanged**; a config file whose route path is
+`/../../etc/passwd` → `projectConfigError` set, `projects: []`, and a capture →
+`500 project_config_invalid`; an origin on a closed port → `502 project_unreachable` naming
+`127.0.0.1:<port>`; a cross-site approval → `403`.
+
+### Defects found and fixed during Phase 3 verification
+
+1. **A real data-loss-class bug in `persistRun`, found by the new integration test.** Building the
+   `writeFile` promises *before* awaiting `mkdir` let them race the directory creation, so the first
+   run in a brand-new data directory failed with `ENOENT` and answered `500 storage_failed`. The unit
+   suite could not see it (it never wrote a run into a fresh directory) and the Phase 1/2 browser
+   suite hid it (its throwaway directory had usually already been populated). The file list is now
+   built first and written only after the directory exists. This is exactly the kind of failure the
+   brief's "real application" requirement is meant to surface — it appeared the moment a second,
+   independent server used an empty data directory.
+2. **The redirect refusal was right but unnamed.** A 302 to a public origin was refused by the
+   network guard before Chromium could commit the navigation, so the capture failed with a generic
+   `capture_failed` rather than `capture_redirected`. Navigation hops the guard refuses are now
+   recorded and reported as the redirect they are, with the destination named.
+3. **A Turbopack build warning** ("dynamic filesystem access causes tracing of the whole project")
+   from `stat`-ing the registration file. Fixed with the documented opt-out comment on that one call,
+   after checking that the file really is outside the build.
+4. **Stale phase copy.** The hero badge and the header badge still said "phase 2"; both now say
+   "phase 3", and the sidebar's "only `/demo` fixtures can be captured" note was rewritten — it had
+   become false the moment registration landed.
+
+### Honest security statement for this phase
+
+- **The loopback bind is the control; the `Host` check is not.** A remote client cannot open a socket
+  to `127.0.0.1`, which is what actually excludes other machines. A caller that can already reach the
+  port can forge `Host`. `0.0.0.0` is no longer accepted as loopback precisely so that a wildcard bind
+  cannot be mistaken for a local one.
+- **There is still no identity.** Anyone with access to the machine and the port can approve, restore
+  and capture. `UIPROOF_ALLOW_REMOTE_BASELINES=1` is not a security feature.
+- **The lock is local-filesystem only.** One machine, no network share. On shared storage the
+  optimistic re-read remains, which prevents an overwrite but is not a distributed lock.
+- **`allowedOrigins` deliberately widens the browser's network reach** for a project that needs a
+  second origin. It is per project, never a wildcard, and empty by default.
+- **Only loopback origins can be registered.** No public or LAN targets, by design in this phase.
+- **The page must stay on its registered origin.** A legitimate cross-origin redirect is refused;
+  register the destination as its own route.
+
 ### Stale README measurements corrected
 
 - The anti-aliased pixel count in `diff.png` was documented as 5,101; the measured value at the
@@ -217,6 +290,44 @@ Beyond the automated suite, the running console was inspected in the preview bro
   the measured value is **39,334**, consistent with `metrics.changedPixels`.
 - Test counts (44/6 files) and the "no baseline history" / "no browser-test harness" limitations were
   rewritten to match what now exists.
+
+---
+
+## Phase 3 — real application integration and security hardening
+
+**Goal:** stop being a tool that only compares its own demo fixtures. Point UIProof at an
+application that is already running on this machine, capture the routes you registered, approve
+their baselines, and detect real drift — without giving the engine a way to screenshot arbitrary
+URLs and without an authentication system (the brief ruled one out unless it was strictly needed).
+
+### Acceptance criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | **A · request guard audited.** `0.0.0.0` is no longer loopback, and the servers bind loopback by default | **Verified** | `isLoopbackHost("0.0.0.0")` and `("0.0.0.0:3000")` are `false`; `package.json` `dev`/`start` and the browser-suite spawner all pass `-H 127.0.0.1`; pinned by `lib/http/loopback-binding.test.ts` |
+| 2 | **A · network clients cannot get write access through spoofed headers** | **Verified** | The bind is the control and it is pinned by test; the suite connects over a real socket to a real server. Honest limit recorded below: `Host` is a header, so it is defence in depth, not authentication |
+| 3 | **A · baseline concurrency made atomic across processes, with tests** | **Verified** | `.manifest.lock` taken with an atomic `mkdir` around the whole read-modify-write, owner pid recorded, no stealing from a live owner, 20 s abandonment, typed conflict error; `lib/compare/file-lock.test.ts` (6 tests) plus the existing optimistic re-read |
+| 4 | **B · projects registered in a local configuration file** | **Verified** | `uiproof.config.json` (or `UIPROOF_PROJECTS_FILE`): id, name, loopback origin, allow-listed routes, optional `allowedOrigins`. `lib/projects/registry.ts` is pure and unit tested (18 tests); `config.ts` re-reads on size/mtime change |
+| 5 | **B · configuration validated rigorously, separate from demo targets** | **Verified** | A malformed entry fails the whole file with a message naming it; origins must be loopback with no path/query/credentials; route paths reject traversal, encoded traversal, query, fragment, backslash, whitespace, controls; duplicate ids/paths refused; project baselines live under `baselines/projects/…` so they can never collide with a demo target |
+| 6 | **C · Playwright captures registered routes** | **Verified** | `capturePage` takes a URL plus an optional origin allow-list; `buildProjectCaptureUrl` rebuilds the URL from the registration, never from the request |
+| 7 | **C · unreachable servers produce actionable errors; redirects cannot escape; network restricted by default** | **Verified** | `probeReachable` → `502 project_unreachable` naming origin and port; a blocked or followed off-origin redirect → `502 capture_redirected` and nothing stored; a request context route aborts every request outside the approved origins and the count lands in `source.blockedRequests` (measured: 1 for the `/embedded` route) |
+| 8 | **C · deterministic settings and project identity preserved** | **Verified** | Viewport, colour scheme, reduced motion, disabled animations, hidden carets, fonts/images awaited — unchanged from Phase 1; reports carry `source: { kind, scopeKey, projectId, projectName, routeId, routeName, origin, path, blockedRequests }` |
+| 9 | **D · per-project, per-route, per-viewport baselines; explicit approval; versions and restore; no contamination; no migration** | **Verified** | Approve/activate/read all resolve a `BaselineScope` first; a run may only be adopted for the scope *and* viewport it came from; demo paths are byte-for-byte the Phase 2 paths, and a Phase 2 manifest still reads (16 new unit assertions cover both kinds) |
+| 10 | **E · dashboard: project and route selection, capture, approve, drift** | **Verified** | One `Source` picker lists the demo fixtures and every registered route under its project's name and origin; modes are per-source (`fixture` is not offered for a project); a capture-only verdict says *captured*, not *pass*; the run timeline is scoped to the selected source |
+| 11 | **F · an independent example application plus the whole workflow against it** | **Verified** | `examples/example-app` (dependency-free Node server, 4 routes + `/healthz` + a deliberate off-origin redirect) and `e2e/project-integration.test.ts` (11 tests): start → register → capture → approve → change its real UI → regress → restore → pass → restart → still there. Numbers in the evidence table below |
+| 12 | **G · full verification, documentation, honest limitations, pushed to GitHub** | **Verified** | lint · typecheck · 155 unit tests · production build · 33 browser tests, all green; README documents registration, the workflow and the security boundary; `docs/PROGRESS.md` records the numbers; commit and push below |
+
+### Milestone log
+
+| Milestone | Outcome |
+|-----------|---------|
+| M14 — hardening audit | `0.0.0.0` removed from loopback classification, servers bound to `127.0.0.1`, the escape hatch pinned by test; the Phase 2 read-write-reread race replaced by a real cross-process lock (`file-lock.ts`) with its own tests |
+| M15 — run sources | `RunSource`, `BaselineScope`, `capture` mode and the additive `source` request field; `run-options.ts` resolves demo and project sources through one path, with typed refusals for an unregistered project or route |
+| M16 — project registry | Pure parser (`registry.ts`) plus cached file reader (`config.ts`); the catalogue exposes projects, the configuration path and any configuration error verbatim |
+| M17 — scoped baselines | `baseline-paths.ts` and `baselines.ts` generalised over scopes, `projects/…` namespaced, dual route trees sharing one handler module |
+| M18 — capture hardening | Origin allow-list, blocked-request accounting, preflight reachability, redirect refusal, navigation-hop detection |
+| M19 — dashboard | Source picker, per-source modes, capture-only states in the verdict, timeline and history, phase 3 copy |
+| M20 — integration test | The independent example application and the eleven-step browser walkthrough, including the refusals |
 
 ---
 
@@ -252,9 +363,12 @@ Beyond the automated suite, the running console was inspected in the preview bro
 - Whole-viewport tolerance only: no ignore regions, no per-region masks, no full-page capture.
 - A run is tied to one viewport; there is no multi-viewport approval.
 - No git SHA on a run yet, so a regression cannot yet name the commit that caused it.
-- Writes are local-only by rule (loopback + same origin), not by identity: there is no auth,
+- Writes are local-only by rule (loopback bind + same origin), not by identity: there is no auth,
   no multi-tenancy and no queue. Concurrent runs share one Chromium.
-- The browser suite is smoke-level and runs against a throwaway data directory; the console UI itself
+- Cross-process safety assumes one machine and a local filesystem; there is no distributed lock.
+- Registered projects are loopback-only, and a page that redirects to another origin is refused
+  rather than captured.
+- The browser suite is smoke-level and runs against throwaway data directories; the console UI itself
   is not screenshot-diffed.
 - The environment used for verification cannot composite browser frames reliably, so UI verification
   measures the rendered DOM and decodes rendered pixels rather than reviewing whole-page screenshots.
@@ -265,7 +379,9 @@ None outstanding.
 
 ## Next approved action
 
-Phase 2 is delivered and verified on `main`. The recommended next milestone is **Phase 3 — make the
-reference trustworthy and the gate useful**: ignore regions recorded in the report, git SHA per run,
-multi-viewport approvals, and a CLI with a real exit code so UIProof can gate someone else's CI.
-Details at the end of the README.
+Phase 3 is delivered and verified on `main`: UIProof captures and drift-checks an independent local
+application, with per-project baselines, a restricted capture network and the loopback bind as its
+real access control. The recommended next milestone is **Phase 4 — make the reference trustworthy and
+the gate useful**: ignore regions recorded in the report, a git SHA per run, multi-viewport approvals,
+and a CLI with a real exit code so UIProof can gate someone else's CI. Details at the end of the
+README.

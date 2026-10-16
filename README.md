@@ -7,8 +7,11 @@ changed, the highlighted difference image, and the artifacts stored on disk.
 Phase 1 delivered the engine and the console. Phase 2 made it a real regression tool: you **approve
 a capture as the baseline**, every later run is diffed against that stored reference, and drift is
 classified as pass or regression against your tolerance — with the baseline version that was used
-recorded in the report. Later phases add accessibility and design-consistency checks, GitHub
-integration, and AI-assisted repair proposals — none of that is wired up yet.
+recorded in the report. Phase 3 points it at your own work: **register an application that is already
+running on this machine**, pick one of its routes, capture it, approve it, and every later run against
+that route is drift-checked against your approved screen. Captures stay inside the origins you
+registered. Later phases add accessibility and design-consistency checks, GitHub integration, and
+AI-assisted repair proposals — none of that is wired up yet.
 
 ---
 
@@ -24,17 +27,25 @@ integration, and AI-assisted repair proposals — none of that is wired up yet.
 - **Real drift detection.** Baseline mode captures the page again, loads the approved reference and
   diffs the two, so a change in the code shows up as a measured percentage against the *approved*
   screen rather than against a second fixture.
-- **A developer console** at `/` to pick a comparison mode, a target, a viewport and a tolerance, run
-  the pipeline, inspect baseline / current / difference screenshots, see the approved baseline and
-  its version history, watch a comparison timeline, and reload any earlier run.
+- **Your own local applications.** A registration file names a loopback origin and an explicit
+  allow-list of routes. Those routes appear in the console next to the demo fixtures, are captured in
+  real Chromium, and get their own baselines — kept apart from the demo targets and from each other.
+- **A developer console** at `/` to pick a source (demo fixture or registered route), a comparison
+  mode, a viewport and a tolerance, run the pipeline, inspect baseline / current / difference
+  screenshots, see the approved baseline and its version history, watch a comparison timeline, and
+  reload any earlier run.
 - **Two local demo fixtures** with deliberate, documented visual differences — plus a `/demo/reverted`
   state that stands in for "the fix", so a regression can be produced and then undone without editing
   source. The engine is testable the moment the app boots.
 - **Local persistence.** Screenshots and the JSON report are written to `.uiproof/data`, so a page
   refresh — or a server restart — keeps the last run, the approved baseline and the version history
   on screen.
-- **A deliberately closed capture surface.** The engine only ever navigates to routes under `/demo`
-  on its own origin. There is no way to point it at an arbitrary URL.
+- **A deliberately closed capture surface.** The engine only ever navigates to compiled demo routes
+  or to routes named in the registration file, on the loopback origins that file declares. A browser
+  request cannot name a URL: it sends a project id and a route id, and the server resolves them
+  against the configuration. While capturing, the browser's network access is restricted to the
+  registered origin (plus any origin the registration explicitly allows), so a page cannot quietly
+  pull in a third-party asset.
 
 ---
 
@@ -89,6 +100,98 @@ the engine produces zero changed pixels — and therefore no false positives —
 
 ---
 
+## Testing your own local application
+
+UIProof can capture an application that is already running on this machine — your dev server, your
+preview build, anything on loopback. Nothing is uploaded and nothing is fetched from the internet:
+the browser it drives talks to `127.0.0.1` (and to whatever you explicitly allow).
+
+### 1 · Declare it
+
+Create `uiproof.config.json` in the repository root (see
+[examples/uiproof.config.example.json](examples/uiproof.config.example.json)):
+
+```json
+{
+  "projects": [
+    {
+      "id": "my-app",
+      "name": "My app",
+      "origin": "http://127.0.0.1:5173",
+      "routes": [
+        { "id": "home", "name": "Home", "path": "/" },
+        { "id": "settings", "name": "Settings", "path": "/settings" }
+      ],
+      "allowedOrigins": []
+    }
+  ]
+}
+```
+
+| Field | Rules |
+| ----- | ----- |
+| `id` | Lowercase letters, digits and dashes, up to 40 characters. Unique across the file. |
+| `name` | How the project is labelled in the console (1–60 characters). |
+| `origin` | `http(s)://` on a **loopback** host with **no** path, query, credentials or fragment — `http://127.0.0.1:5173`, not `https://staging.example.com`. |
+| `routes` | A non-empty allow-list. Each entry needs an `id`, a `name` and a `path` that starts with `/` and contains no traversal (literal or percent-encoded), query, fragment, backslash or whitespace. |
+| `allowedOrigins` | Optional. Extra origins the *page* may load resources from while being captured. Empty by default, so a capture is hermetic unless you widen it on purpose. Any `http(s)` origin; wildcards are refused. |
+
+A malformed entry fails the whole file with a message naming the entry, and the console says so — half
+a registry silently applied would be worse than none. The file is re-read whenever it changes (cached
+on its size and modification time), so registering a route needs no restart.
+
+Set `UIPROOF_PROJECTS_FILE` to keep the file somewhere else:
+
+```bash
+UIPROOF_PROJECTS_FILE=~/work/my-app.uiproof.json pnpm dev
+```
+
+### 2 · Capture, approve, drift
+
+1. Start your application (for the bundled example: `pnpm example:app`).
+2. Open the console, pick your route under **Source**, and choose **Capture only**. One screenshot is
+   stored — the console reports **captured**, never "pass", because there is nothing to compare
+   against yet.
+3. Press **Approve this run as the baseline** and confirm.
+4. Choose **Approved baseline** and run again. An unchanged screen reports **0 %**; change your UI in
+   your editor, run again, and the difference is measured, highlighted and stored.
+5. Fix (or revert) the UI and run once more: back to **0 %** against the same approved version.
+
+Approving is always explicit and always additive: replacing a baseline appends a version, restoring
+an older one is one action, and a regression never approves itself.
+
+### 3 · Watch it work on the example app
+
+The repository ships a second web application for exactly this: a small billing UI under
+[examples/example-app](examples/example-app) that UIProof did not write.
+
+```bash
+pnpm example:app                       # http://127.0.0.1:4173
+cp examples/uiproof.config.example.json uiproof.config.json
+pnpm dev                               # http://localhost:3000
+```
+
+`views/home.changed.html` is the same screen with different figures, a recoloured header rule and two
+status changes. Copy it over `views/home.html` (or edit that file yourself — the server re-reads it on
+every request), run the comparison again, and the console reports the regression. Put the original
+back and it passes. That is the whole loop, on an application that has nothing to do with UIProof's
+own fixtures.
+
+### What is refused
+
+| Attempt | Answer |
+| ------- | ------ |
+| A project id that is not in the file | `400 project_not_registered` |
+| A route id that is not in that project (including `../` tricks) | `400 route_not_registered` |
+| An absolute URL as a target | `400 invalid_target` |
+| A registered route whose page redirects off the registered origin | `502 capture_redirected`, and nothing is stored |
+| A development server that is not listening | `502 project_unreachable`, naming the origin and the port |
+| A configuration file with an unsafe route path | The whole file is reported unusable (`GET /api/catalog` carries `projectConfigError`); a capture returns `500 project_config_invalid` |
+| A resource on an origin the registration does not allow | The request is aborted in the browser and counted in the report's `source.blockedRequests` |
+| A cross-site or non-loopback approval | `403` |
+
+---
+
 ## Architecture
 
 ```
@@ -116,29 +219,41 @@ src/
     │   ├── types.ts                   # shared domain types (modes, baselines, reports)
     │   ├── metrics.ts                 # pure metric maths, verdicts, validation, formatting
     │   ├── targets.ts                 # viewport presets + trusted-route allow-list + targets
-    │   ├── run-options.ts             # pure parsing/validation of one run request
-    │   ├── baseline-paths.ts          # pure baseline file naming + traversal guards
-    │   ├── baselines.ts               # approved-baseline store: approve, activate, read
-    │   ├── diff.ts                    # pure: decode PNG → normalise → pixelmatch → diff PNG
-    │   ├── browser.ts                 # Chromium singleton with idle shutdown
-    │   ├── capture.ts                 # deterministic Playwright capture
-    │   ├── storage-paths.ts           # pure path rules + traversal guards
-    │   ├── storage.ts                 # filesystem persistence of artifacts and reports
-    │   ├── engine.ts                  # orchestrates one run (fixture or baseline mode)
-    │   └── errors.ts                  # typed errors → HTTP status mapping
-    ├── http/                          # request trust, capture origin, local-only write guard
-    ├── api-client.ts                  # typed fetch client used by the console
+    │   ├── run-options.ts             # pure parsing/validation of one run request│   ├── baseline-paths.ts          # pure baseline naming + traversal guards, per scope
+│   ├── baselines.ts               # approved-baseline store: approve, activate, read
+│   ├── file-lock.ts               # cross-process lock (atomic mkdir) for manifest writes
+│   ├── source-selection.ts        # pure: the console's source model (demo target | project route)
+│   ├── diff.ts                    # pure: decode PNG → normalise → pixelmatch → diff PNG
+│   ├── browser.ts                 # Chromium singleton with idle shutdown
+│   ├── capture.ts                 # deterministic capture + origin allow-list + redirect refusal
+│   ├── storage-paths.ts           # pure path rules + traversal guards
+│   ├── storage.ts                 # filesystem persistence of artifacts and reports
+│   ├── engine.ts                  # orchestrates one run (fixture, baseline or capture)
+│   └── errors.ts                  # typed errors → HTTP status mapping
+    ├── projects/                    # registered local applications
+    │   ├── registry.ts              # pure: parse and validate a registration file
+    │   └── config.ts                # cached reader (env path or uiproof.config.json)
+    ├── http/                        # request trust, capture origin, local-only guard, baseline handlers
+    ├── api-client.ts                # typed fetch client used by the console
     └── format-time.ts
 ```
 
 ```
-e2e/                                   # browser suite (real Chromium, real server)
+e2e/                                   # browser suite (real Chromium, real servers)
 ├── support/e2e-server.ts              # boots `next start` on a scratch port + data dir
 ├── support/setup.ts                   # Vitest global setup / teardown
 ├── support/helpers.ts                 # assertions, API readers, mode/variant selection
+├── support/example-app.ts             # starts the independent example app for the tests
 ├── dashboard-smoke.test.ts            # console flow, measured verdict, persistence after reload
 ├── accessibility.test.ts              # the Phase 1 audit regressions, pinned
-└── baseline-lifecycle.test.ts         # approve → pass → regress → recover → restore → reload
+├── baseline-lifecycle.test.ts         # approve → pass → regress → recover → restore → reload
+└── project-integration.test.ts        # register → capture → approve → real UI change → regress → restore → restart
+examples/
+├── example-app/                       # the independent application (no dependencies)
+│   ├── server.mjs                     #   reads views/ per request; /moved redirects away
+│   ├── views/                         #   home, home.changed, settings, pricing, embedded
+│   └── assets/app.css
+└── uiproof.config.example.json        # how to register it
 .github/workflows/ci.yml               # install · lint · typecheck · test · build · e2e
 ```
 
@@ -147,35 +262,44 @@ e2e/                                   # browser suite (real Chromium, real serv
 ```
 POST /api/compare
       │
-      ├─ validate target id ──► targets.ts       (allow-list, not user input)
+      ├─ resolve the source ─────────► run-options.ts
+      │    · demo target id ──► targets.ts        (compiled allow-list)
+      │    · project + route ─► projects/registry.ts (the registration file, not user input)
       ├─ validate viewport  ──► targets.ts
       ├─ validate tolerance ──► metrics.ts
       └─ resolve mode + page state ──► run-options.ts, targets.ts
       │
-      │  mode = fixture                  mode = baseline
-      │  ─────────────                  ───────────────
-      ├─ capture /demo/baseline         ├─ load approved version ──► baselines.ts
-      └─ capture the page state         └─ capture the page state
-                 │                              │
-                 └──────────────┬───────────────┘
-                                │
-                 ├─ decode + dimension match ──► diff.ts
+      │  mode = fixture            mode = baseline               mode = capture
+      │  ─────────────            ───────────────               ──────────────
+      ├─ capture /demo/baseline   ├─ load approved version       └─ capture just the page
+      └─ capture the page state   └─ capture the page state          (nothing to compare yet)
+                 │                          │                             │
+                 └──────────────┬───────────┘                             │
+                                │                                         │
+                 ├─ decode + dimension match ──► diff.ts                  │
                  ├─ pixelmatch ────────────────► changed pixels + diff PNG
                  └─ verdict ───────────────────► metrics.ts (tolerance decides pass/regression)
-                                │
-                                └─ write 3 PNGs + report.json (with the baseline
-                                   version that was used) ──► storage.ts (.uiproof/data)
+                                │                                         │
+                                └──── write PNGs + report.json ◄──────────┘
+                                      (with the baseline version that was used)
+                                      ──► storage.ts (.uiproof/data)
 ```
 
 Approval is a separate, explicit step that never happens as part of a run:
 
 ```
-POST /api/baselines            POST /api/baselines/:target/:viewport/activate
+POST /api/baselines            POST /api/baselines/…/activate
    │                                │
    └─ copy the run's current.png    └─ point the manifest at an existing version
       to bl-<uuid>.png, append a        (restore an older reference; every image stays)
       version to manifest.json,
-      set it active — atomically
+      set it active — atomically,
+      under a cross-process lock
+
+scope = { kind: "demo", targetId }            scope = { kind: "project",
+          ────────────────────────                    projectId, routeId }
+   baselines/<target>/<viewport>/                  ──────────────────────────
+                                                     baselines/projects/<project>/<route>/<viewport>/
 ```
 
 **Separation of concerns.** The comparison layer is plain TypeScript with no React and no browser:
@@ -196,10 +320,26 @@ the engine never renders.
 | `POST` | `/api/baselines`                                 | **Approve** a stored run as the baseline (`{ targetId, viewportId, sourceReportId, note? }`) |
 | `POST` | `/api/baselines/:target/:viewport/activate`      | **Replace / restore**: make an existing version the active reference        |
 | `GET`  | `/api/baselines/:target/:viewport/:version.png`  | An approved baseline image (immutable, long-cached)                        |
+| `GET`  | `/api/baselines/projects/:project/:route/:viewport` | The same for a registered project route                                 |
+| `POST` | `/api/baselines/projects/:project/:route/:viewport/activate` | Replace / restore a project route's reference                  |
+| `GET`  | `/api/baselines/projects/:project/:route/:viewport/:version.png` | An approved project baseline image                  |
+
+`POST /api/compare` and `POST /api/baselines` accept one of two bodies. Phase 3 spelling, which is
+what the console sends:
+
+```json
+{ "source": { "kind": "project", "projectId": "my-app", "routeId": "home" },
+  "viewportId": "desktop", "mode": "capture" }
+```
+
+and the Phase 1/2 spelling, still accepted unchanged: `{ "targetId": "invoice-summary", "mode": "fixture" }`.
+A run's `mode` is `fixture`, `baseline` or `capture`; an absent mode means "whatever this source does by
+default" — the fixture pair for a demo target, a plain capture for a project route.
 
 Errors use a stable shape and status: `{ "error": { "code", "message" } }` — `400` invalid input or
 unsafe path, `403` cross-site request or non-local write, `404` unknown run or unknown baseline
-version, `502` capture failure, `503` Chromium unavailable.
+version, `502` capture failure (including a refused redirect and an unreachable app), `503` Chromium
+unavailable, `500` an unusable registration file.
 
 All three state-changing writes (`POST`) are **local-only**: they require a loopback host, no
 cross-site `Sec-Fetch-Site`, and an `Origin` that matches `Host`. Reads are unrestricted.
@@ -215,6 +355,11 @@ curl -s -X POST http://localhost:3000/api/compare \
 curl -s -X POST http://localhost:3000/api/baselines \
   -H 'Content-Type: application/json' -H 'Origin: http://localhost:3000' \
   -d '{"targetId":"invoice-summary","viewportId":"desktop","sourceReportId":"run-…"}'
+
+# capture one route of an application registered in uiproof.config.json
+curl -s -X POST http://localhost:3000/api/compare \
+  -H 'Content-Type: application/json' -H 'Origin: http://localhost:3000' \
+  -d '{"source":{"kind":"project","projectId":"my-app","routeId":"home"},"mode":"capture"}'
 ```
 
 ---
@@ -237,10 +382,35 @@ UIProof drives a real browser, so the capture surface is intentionally closed:
    `/api/baselines/…/current.png` or a traversal segment is a `400`, not a read.
 5. **The origin is never user-supplied.** It comes from the incoming request or `UIPROOF_BASE_URL`.
 6. **Approval cannot be adopted across targets.** A run may only become the baseline for the target
-   *and* viewport it was captured at; a Desktop run offered as the Mobile reference is a `400`.
+   *and* viewport it was captured at; a Desktop run offered as the Mobile reference is a `400`. The
+   same holds across projects: a run of one project route is never another project's reference.
 7. **State-changing calls are local-only.** `/api/baselines` and `/activate` refuse non-loopback
-   hosts and foreign origins, so a deployed copy of the console cannot be approved against by
-   strangers. This is the "local prototype" boundary, not an auth system.
+   hosts and foreign origins. See *How local-only actually works* below — the honest version.
+8. **Only registered origins are captured.** A project must be a loopback `http(s)` origin with an
+   expiry-free path, and every capture URL is rebuilt from the registration (`buildProjectCaptureUrl`)
+   and re-validated against the same path rules. A route the file does not name does not exist: the
+   API answers `400`, it never guesses a URL.
+9. **The capture browser is restricted to approved origins by default.** Every request the page makes
+   is checked against the captured origin plus the registration's `allowedOrigins`; anything else is
+   aborted and counted in the report as `source.blockedRequests`. Widening this is a deliberate edit.
+10. **A redirect cannot move the capture.** If the page leaves its registered origin — followed or
+    blocked by the network guard — the capture fails with `capture_redirected` and stores nothing.
+
+### How local-only actually works
+
+Be precise about this, because `Host` is a header and headers are written by the client:
+
+- **The real control is the bind address.** `pnpm dev`, `pnpm start` and the browser suite all bind
+  `127.0.0.1`. A socket on loopback cannot be connected to from another machine, so a remote client
+  has nothing to talk to. If you start UIProof some other way, bind it yourself.
+- **The `Host` check is defence in depth, not authentication.** `0.0.0.0` and `::` are *not* treated as
+  loopback (they mean "a wildcard bind, reachable from the network") and neither is anything that
+  merely contains `localhost`. But a caller that can already reach the port can send `Host: 127.0.0.1`.
+  The bind, not this check, is what keeps other machines out.
+- **There is no identity.** Anyone with access to this machine and to the port has full write access:
+  no users, no roles, no tokens. `UIPROOF_ALLOW_REMOTE_BASELINES=1` exists only for someone who has
+  put UIProof behind their own access control — it is not a security feature. Do not expose it to a
+  network you do not control.
 
 ---
 
@@ -252,11 +422,19 @@ appends a version to that pair's manifest:
 
 ```
 .uiproof/data/
-├── reports/run-<uuid>/            baseline.png · current.png · diff.png · report.json
-└── baselines/<target>/<viewport>/
-    ├── manifest.json              the version list + which one is active
-    └── versions/bl-<uuid>.png     one immutable approved image per version
+├── reports/run-<uuid>/                     baseline.png · current.png · diff.png · report.json
+│                                            (a capture-only run has current.png only)
+├── baselines/<target>/<viewport>/           demo targets — unchanged since Phase 2
+│   ├── manifest.json                       the version list + which one is active
+│   └── versions/bl-<uuid>.png              one immutable approved image per version
+└── baselines/projects/<project>/<route>/<viewport>/
+    ├── manifest.json
+    └── versions/bl-<uuid>.png
 ```
+
+The `projects` segment namespaces registered applications away from demo targets, so the two can
+never share a directory — and project baselines existed only from Phase 3 onwards, so nothing from
+Phase 2 was migrated or rewritten.
 
 Properties, all of them verified rather than intended:
 
@@ -266,14 +444,20 @@ Properties, all of them verified rather than intended:
   stays served. Restoring it is one `activate` call and it keeps its original `approvedAt`.
 - **Each version records its provenance:** id, `approvedAt`, `sourceReportId`, the route it captured
   (`capturedRoute`), image size and bytes, and an optional note.
-- **Metadata updates are atomic.** The manifest is written to a temporary file in the same directory
-  and renamed over the target, so a crash mid-write cannot leave half a JSON document. Approvals
-  serialise in-process per target/viewport, and every write re-reads the manifest afterwards and
-  retries on top of the newer one if another process won the race.
+- **Metadata updates are atomic, and cross-process safe on one machine.** The manifest is written to
+  a temporary file in the same directory and renamed over the target, so a crash mid-write cannot
+  leave half a JSON document. Every mutation holds a filesystem lock (`.manifest.lock`, taken with an
+  atomic `mkdir`) for the whole read-modify-write, waits rather than stealing a lock whose owner is
+  still alive, and treats a lock whose owner has died as abandoned after 20 s. Approvals also serialise
+  in-process per scope, and every write re-reads the manifest and retries on a lost update. This is a
+  local-filesystem lock, not a distributed one: it assumes one machine and no network storage.
 - **A report says which reference it used.** Baseline-mode reports carry
   `baseline: { versionId, approvedAt, sourceReportId, capturedRoute, width, height, imageUrl }`,
   which is what makes a regression attributable to a specific approved image.
-- **Separate per target and viewport.** Desktop and Mobile approvals are independent records.
+- **Separate per source and viewport.** Desktop and Mobile approvals are independent records, and so
+  are the demo targets and each registered project route. A run is always resolved to a scope before
+  anything is read or written, and a manifest whose rows disagree with its own scope is treated as
+  unreadable rather than trusted.
 - **Only a whole, matching image can be adopted.** The stored `current.png` must decode before it is
   adopted, and a manifest whose rows disagree with its own directory is reported as unreadable rather
   than trusted.
@@ -309,6 +493,8 @@ content), raise the tolerance or exclude the region deliberately — never fake 
 | ------------------- | ------------------------ | ------------------------------------------------------------ |
 | `UIPROOF_DATA_DIR`  | `<project>/.uiproof/data`| Where reports and screenshots are stored                     |
 | `UIPROOF_BASE_URL`  | the incoming request's origin | Origin used to reach the fixtures while capturing        |
+| `UIPROOF_PROJECTS_FILE` | `<project>/uiproof.config.json` | The project registration file                       |
+| `UIPROOF_ALLOW_REMOTE_BASELINES` | unset | `1` relaxes the loopback check on approvals — only behind your own access control |
 
 ---
 
@@ -326,6 +512,7 @@ content), raise the tolerance or exclude the region deliberately — never fake 
 | `pnpm test:e2e`      | Browser suite against a real production server      |
 | `pnpm verify`        | lint → typecheck → test → build → test:e2e          |
 | `pnpm setup:browser` | Install the Chromium build Playwright drives        |
+| `pnpm example:app`   | Serve the bundled example application on port 4173   |
 
 `pnpm test:e2e` needs `pnpm build` to have run first: it starts `next start` on a scratch port with a
 throwaway `UIPROOF_DATA_DIR`, so it never touches your own runs and baselines. `pnpm verify` chains
@@ -337,8 +524,8 @@ typecheck, unit tests, production build, Chromium install, browser suite.
 
 ## Testing
 
-`pnpm test` runs **84 unit tests** across 9 files, all covering the engine, the guards and the
-baseline store rather than the UI shell:
+`pnpm test` runs **155 unit tests** across 13 files, all covering the engine, the guards, the
+baseline store and the registration parser rather than the UI shell:
 
 | File                            | Coverage                                                                                               |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -350,6 +537,10 @@ baseline store rather than the UI shell:
 | `lib/compare/baseline-paths.test.ts` | Version-id and image-name patterns, traversal refusal, URL building                                 |
 | `lib/compare/baselines.test.ts` | Approve → version → activate against a real temp directory: append-only versions, ownership refusal on a foreign run, atomic manifest, corrupt-manifest handling, restore keeping `approvedAt`, orphan cleanup |
 | `lib/http/trusted-request.test.ts`  | Same-origin rules, cross-site and opaque-origin rejection, loopback-only write guard               |
+| `lib/http/loopback-binding.test.ts` | Pins the loopback bind in `dev`/`start`, that `0.0.0.0` is no longer treated as loopback, and that no script turns the remote-write escape hatch on |
+| `lib/projects/registry.test.ts` | Registration parsing: loopback-only origins, path rules (traversal, encoded traversal, query, fragment, backslash), duplicate ids and paths, size limits, `allowedOrigins` validation, capture-URL rebuilding |
+| `lib/compare/source-selection.test.ts` | The console's source model: scope keys, request shapes, baseline endpoint paths, per-source defaults |
+| `lib/compare/file-lock.test.ts` | The cross-process lock: serialised critical sections, no stealing from a live owner, abandoned-lock takeover, timeout |
 | `lib/format-time.test.ts`       | Relative time, UTC clock, duration formatting                                                          |
 
 `diff.test.ts` is the important one: it builds synthetic PNGs in memory and asserts **exact** pixel
@@ -360,7 +551,7 @@ keeps the original approval timestamp.
 
 ### Browser suite
 
-`pnpm test:e2e` runs **22 tests** across 3 files in real Chromium, against a real `next start` server
+`pnpm test:e2e` runs **33 tests** across 4 files in real Chromium, against a real `next start` server
 on a throwaway data directory ([e2e/](e2e)):
 
 | File | Coverage |
@@ -368,6 +559,7 @@ on a throwaway data directory ([e2e/](e2e)):
 | `dashboard-smoke.test.ts` | Console renders with no console errors · the mode invariant (baseline mode is gated on an approved baseline actually existing) · a fixture run produces a measured verdict whose stored report agrees with the panel, with three real PNGs served · the reverted page state reports 0 px, not a false positive · the report survives a reload · the capture guard still closes |
 | `accessibility.test.ts` | The Phase 1 audit regressions, pinned as measurements rather than claims: flex prose in reading order, every control ≥ 24 px, the slider hairline inside a 24 px hit area, zoom buttons at full size, WCAG AA contrast in both colour schemes, no overflow at 390 px, a focus ring on every keyboard stop, and the timeline reachable by keyboard with a ring on the focused bar |
 | `baseline-lifecycle.test.ts` | The seven-step lifecycle below, driven through the UI wherever the UI has an action for it |
+| `project-integration.test.ts` | The Phase 3 workflow against an independent application: start it, register it, capture a route, approve it, change the application's real UI, detect the regression, restore it, pass again, restart UIProof and find everything still there — plus the refusals |
 
 The lifecycle, in the order the suite checks it:
 
@@ -384,9 +576,30 @@ The lifecycle, in the order the suite checks it:
 
 The suite does not fabricate results: every comparison launches Chromium and diffs a 1280 × 800
 viewport, and every assertion reads either the running UI or the stored artifact it produced. It is
-also order-independent — the three files may run in any order, because the smoke suite asserts the
+also order-independent — the files may run in any order, because the smoke suite asserts the
 *invariant* ("baseline mode is enabled exactly when a baseline is stored") rather than assuming a
 clean store. Verified with `--sequence.shuffle.files --sequence.seed=7`.
+
+### The Phase 3 walkthrough, on somebody else's application
+
+`project-integration.test.ts` is the one that matters for this phase. It copies
+[examples/example-app](examples/example-app) to a temporary directory, starts it on its own port,
+writes a registration file for it, starts a **second** UIProof server against that file, and then,
+through the browser:
+
+| Step | What is asserted |
+| ---- | ---------------- |
+| Start the app | `/healthz` answers, and the shipped screen serves `$48,200` |
+| Register it | `GET /api/catalog` carries the project, its origin and all four routes; the picker shows them under the project's name with its origin |
+| Capture | `POST /api/compare` returns `status: "captured"` — **no percentage**, no `diff.png` on disk, and a real decodable 1280 × 800 PNG |
+| Approve | Through the console's two-step confirmation; the stored version names the capture run, the route `/` and 1280 × 800 |
+| Unchanged | Baseline mode reports **pass, 0 of 1,024,000 px**, naming the approved version |
+| Network guard | A route that loads an image from another origin still captures, with `source.blockedRequests ≥ 1` |
+| Real UI change | The application's own view file is replaced with the changed screen; the run reports a **regression**, and the decoded diff image contains **exactly** `metrics.changedPixels` difference pixels |
+| No self-approval | The baseline manifest still holds one version, still active |
+| Restore | The original view goes back; the run reports **pass, 0 px** from the same version |
+| Restart | UIProof is stopped and started again on the same data directory: the baseline and every run id are still there, and a fresh run still passes |
+| Refusals | Unregistered project, unregistered/traversal route, absolute URL, off-origin redirect (`502`, nothing stored), unsafe path in the config file, unreachable dev server, cross-site approval |
 
 ### Verified end to end
 
@@ -421,6 +634,24 @@ Checked against a running server, not just in tests:
   contrast — all pass AA in both light and dark mode (body text 16:1, primary button 4.9:1,
   semantic badges 4.6–4.9:1, status swatches ≥ 5:1). Two light-mode pairs failed the first audit
   (amber 2.65:1, faint labels 3.93:1) and were corrected.
+- **Registered application (Phase 3):** against [examples/example-app](examples/example-app) on its
+own port, in one production session — capture-only **310 ms** (942 ms end to end, 48,302-byte PNG)
+  → approval `bl-d8fe56c5-…` at `/`, 1280 × 800, byte-identical size to the capture → unchanged
+  baseline run **pass, 0 / 1,024,000 px, 363 ms** → the application's view file swapped for
+  `home.changed.html` → **regression, 9,945 / 1,024,000 px = 0.9712 %**, capture 189 ms, compare
+  212 ms, diff image 67,500 bytes with **exactly 9,945** difference-coloured pixels (the suite
+  asserts that equality by decoding the PNG) → original view restored → **pass, 0 px, 391 ms**. The
+  baseline manifest still held **one** version, active, after all of it, and after UIProof was
+  restarted on the same data directory both the baseline and all five runs were still there.
+- **Capture network restriction:** the `/embedded` route of the example app pulls an image from
+  `https://cdn.example.com`. The capture succeeded and the report recorded `blockedRequests: 1` — the
+  request never left the machine, and the page still rendered.
+- **Refusals (Phase 3):** unregistered project → `400`; unknown or traversal route → `400`; absolute
+  URL target → `400`; a registered route that 302s to `https://example.com` → `502
+  capture_redirected` with nothing stored; a config file with `"/../../etc/passwd"` as a route path →
+  the whole file reported unusable and a capture answered `500 project_config_invalid`; a dev server
+  that is not listening → `502 project_unreachable` naming the origin and port; cross-site approval →
+  `403`.
 - **Stability:** five repeat runs at one revision → identical changed-pixel counts; the control
   target → 0 changed pixels, verdict `pass`, three times.
 
@@ -428,9 +659,22 @@ Checked against a running server, not just in tests:
 
 ## Known limitations
 
-- **Local only, single process.** Artifacts live on the local filesystem; a read-only or ephemeral
-  filesystem (most serverless hosts) will break persistence. `storage.ts` is the single seam to swap
-  in object storage.
+- **Local only.** Artifacts live on the local filesystem; a read-only or ephemeral filesystem (most
+  serverless hosts) will break persistence. `storage.ts` is the single seam to swap in object storage.
+- **No identity, and the `Host` header is not one.** The write endpoints refuse non-loopback `Host`
+  values and foreign origins, but the control that actually excludes other machines is the loopback
+  bind. Everyone who can reach the port has full write access. See *How local-only actually works*.
+- **Cross-process safety is filesystem-local.** The baseline lock (`.manifest.lock`) assumes one
+  machine and a local filesystem. On a network share, or across hosts, the optimistic re-read is all
+  that is left — enough to avoid an overwrite, not enough to be a distributed lock.
+- **Loopback origins only.** A registration cannot point at a public site or a LAN hostname, so
+  staging environments on another machine are out of scope for this phase (and deliberately so: the
+  brief was explicit that public URL scanning is not part of it).
+- **`allowedOrigins` widens the capture's network surface.** It is opt-in per project and never a
+  wildcard, but a page that needs a CDN or a second local port will fetch it during a capture.
+- **The page itself must stay on its registered origin.** A legitimate cross-origin redirect (an auth
+  hop, for example) is refused; register the destination as its own route instead of allowing it
+  through the capture.
 - **A baseline is approved by hand.** There is no "approve automatically on `main`", no scheduled
   refresh and no threshold that promotes a run: a regression never approves itself, by design.
 - **Viewport captures only.** Screenshots are viewport-sized, so differences below the fold are not
@@ -459,7 +703,7 @@ Checked against a running server, not just in tests:
 
 ## Next milestone
 
-**Phase 3 — make the reference trustworthy and the gate useful.**
+**Phase 4 — make the reference trustworthy and the gate useful.**
 
 1. **Ignore regions.** Selector- or rectangle-based masks, recorded in the report, so a volatile
    area can be excluded visibly instead of by lowering the global tolerance.
@@ -467,8 +711,8 @@ Checked against a running server, not just in tests:
    the git SHA (and dirty state) it was captured at, so a regression names the change that caused it.
 3. **Multi-viewport approvals.** One approval covering desktop/tablet/mobile, with per-viewport pass
    or fail in a single report.
-4. **A CLI and an exit code.** `uiproof compare --fail-on regression` so the browser suite can be the
-   quality gate in someone else's CI, not just in this repository's.
+4. **A CLI and an exit code.** `uiproof compare --fail-on regression --project my-app --route home` so
+   a developer's own CI can gate on UIProof's verdict, not just this repository's suite.
 5. **Then accessibility scanning** (axe-core plus the measurements this repository already makes), and
    only afterwards GitHub integration and AI repair proposals.
 
