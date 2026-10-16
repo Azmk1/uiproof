@@ -1,0 +1,173 @@
+name: Visual regression
+
+# The example CI gate the Phase 4 brief asks for: a clean runner, no pre-existing UIProof
+# data, one command that answers "did the UI change?" with an exit code.
+#
+#   0  the comparison passed
+#   1  a visual regression was detected
+#   2  configuration, baseline, browser or infrastructure error
+#
+# It never needs a paid service, an API key or a hosted backend: the tool renders with the
+# Chromium Playwright already downloaded and reads and writes plain files in the workspace.
+#
+# Worth reading before copying this into your own repository: a baseline is a screenshot, so
+# it only matches pixel-for-pixel on the platform that rendered it. This job therefore loads
+# the committed bundle to prove the portable path works on a clean runner, then approves the
+# baseline *this runner* will be gated against. See
+# `examples/uiproof-baselines/README.md#one-honest-caveat-rendering-environments`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: visual-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+  CI: "1"
+  APP_URL: http://127.0.0.1:4173
+  UIPROOF_CONFIG: examples/ci/uiproof.config.json
+  UIPROOF_BUNDLE: examples/uiproof-baselines
+
+jobs:
+  visual-regression:
+    name: uiproof CLI · approved baseline · exit codes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Chromium is the only thing the CLI needs beyond Node and this repository.
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Start the application under test
+        # HOST and PORT are set here rather than inherited: the registration file below
+        # names http://127.0.0.1:4173, and an ambient PORT must not move the application
+        # out from under it.
+        run: |
+          HOST=127.0.0.1 PORT=4173 nohup node examples/example-app/server.mjs > /tmp/example-app.log 2>&1 &
+          echo $! > /tmp/example-app.pid
+
+      - name: Wait for the application to become healthy
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -sf "$APP_URL/healthz" > /dev/null; then
+              echo "the example application answered /healthz after $attempt attempt(s)"
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::the example application never became healthy"
+          cat /tmp/example-app.log
+          exit 1
+
+      - name: Load the approved baseline from the repository
+        # The portable path: a bundle committed next to the code, loaded into a store that
+        # does not exist yet. Every image is checked against its recorded SHA-256, byte
+        # count and dimensions before it is written, and nothing is activated unless
+        # --activate says so.
+        run: |
+          pnpm uiproof baselines import --from "$UIPROOF_BUNDLE" --activate --config "$UIPROOF_CONFIG"
+          pnpm uiproof baselines status --config "$UIPROOF_CONFIG"
+
+      - name: Approve the baseline for this runner
+        # The committed image was rendered on another platform, so it is not the reference
+        # this runner compares against. Approving here is the recommended CI strategy: the
+        # gate's reference comes from the environment that runs the gate.
+        run: |
+          pnpm uiproof capture --project example-app --route home --approve \
+            --note "approved on the CI runner" --config "$UIPROOF_CONFIG"
+
+      - name: Gate — the unchanged application passes
+        run: |
+          set +e
+          pnpm uiproof check --project example-app --route home --config "$UIPROOF_CONFIG"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::error::expected exit 0 for an unchanged page, got $status"
+            exit 1
+          fi
+          echo "exit 0 — no regression detected"
+
+      - name: Gate — a real UI change fails the job
+        # `home.changed.html` is a genuine edit to the application's own view: different
+        # figures, a recoloured header rule and two status changes. The gate must notice,
+        # and the run's JSON is kept next to the reports for the artifact upload below.
+        run: |
+          cp examples/example-app/views/home.changed.html examples/example-app/views/home.html
+          set +e
+          # `--silent` keeps pnpm's own banner out of stdout, so the file is one JSON
+          # document and nothing else — the same promise `--json` makes.
+          pnpm --silent uiproof check --project example-app --route home --json --config "$UIPROOF_CONFIG" \
+            > .uiproof/regression.json
+          status=$?
+          set -e
+          node -e '
+            const report = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+            console.log(`uiproof: status=${report.status} changed=${report.report.metrics.changePercentage}% (tolerance ${report.tolerance}%)`);
+          ' .uiproof/regression.json
+          if [ "$status" -ne 1 ]; then
+            echo "::error::expected exit 1 for a regression, got $status"
+            exit 1
+          fi
+          echo "exit 1 — the regression was detected"
+
+      - name: Gate — the reverted application passes again
+        run: |
+          git checkout -- examples/example-app/views/home.html
+          set +e
+          pnpm uiproof check --project example-app --route home --config "$UIPROOF_CONFIG"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::error::expected exit 0 after reverting the change, got $status"
+            exit 1
+          fi
+
+      - name: Export the runner-approved baseline
+        # What you commit (or download) to make this runner's rendering the reference: a
+        # bundle produced here is pixel-exact for a gate that runs in the same environment.
+        run: pnpm uiproof baselines export --project example-app --route home --out .uiproof/runner-baseline --config "$UIPROOF_CONFIG"
+
+      - name: Upload the reports, screenshots and the approved bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uiproof-visual-regression
+          # The store: one directory per run with report.json, current.png, baseline.png and
+          # diff.png. A regression is reviewable from these files alone.
+          path: |
+            .uiproof/data
+            .uiproof/regression.json
+            .uiproof/runner-baseline
+            /tmp/example-app.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop the application under test
+        if: always()
+        run: |
+          if [ -f /tmp/example-app.pid ]; then
+            kill "$(cat /tmp/example-app.pid)" 2>/dev/null || true
+          fi

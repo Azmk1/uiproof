@@ -14,7 +14,9 @@
     "test:e2e": "vitest run --config vitest.e2e.config.mts",
     "verify": "eslint && tsc --noEmit && vitest run && next build && vitest run --config vitest.e2e.config.mts",
     "setup:browser": "playwright install chromium",
-    "example:app": "node examples/example-app/server.mjs"
+    "example:app": "node examples/example-app/server.mjs",
+    "uiproof": "node scripts/uiproof.mjs",
+    "build:cli": "node scripts/uiproof.mjs --build-only"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.5.0",
@@ -37,6 +39,7 @@
     "@types/pngjs": "^6.0.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "16.4.1",
     "tailwindcss": "^4",

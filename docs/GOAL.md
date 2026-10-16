@@ -103,3 +103,40 @@ pull-request automation, AI repairs, public URL scanning, multi-user SaaS behavi
 - No fabricated comparisons in the integration test: the example application's UI really changes, and
   the regression is measured from real captures.
 - The security statement stays honest about what is and is not a control.
+
+## Phase 4 — CLI, portable baselines and CI quality gates (delivered)
+
+**Goal:** let a developer run UIProof from a terminal and use it to block real visual regressions in
+their own pipeline, with no dashboard involved.
+
+**In scope**
+
+1. A production-quality Node CLI — `capture`, `check`, `projects`, `baselines`, `--help`, `--version` —
+   with explicit project, route, viewport, configuration, storage and tolerance options, invoking the
+   existing engine directly rather than through the server.
+2. Documented, deterministic exit codes: `0` pass, `1` regression, `2` anything that stopped the tool
+   from answering — capture-only reported as *captured*, never as a pass — plus readable terminal
+   output and optional structured JSON for automation.
+3. Portable approved baselines: a committable bundle with metadata and integrity validation, explicit
+   activation only, no automatic replacement, no version overwrites, and a documented strategy for
+   keeping bundles in a repository. Runtime reports stay separate from canonical baselines.
+4. A working GitHub Actions example on a clean runner: check out an example project, install, start its
+   application, wait for health, load an approved baseline, run the CLI, fail the job when a regression
+   exceeds tolerance, and upload screenshots and comparison reports.
+5. End-to-end verification with real Chromium — unchanged page `0`, modified page `1`, missing baseline
+   `2`, invalid project or route `2`, unreachable application `2`, JSON output matching the persisted
+   report, export/import surviving a fresh working directory, and a clean CI-style run detecting a
+   regression.
+
+**Explicitly out of scope for Phase 4:** AI integration, authentication or multi-user SaaS features, a
+cloud database, extra services, publishing a package to npm, and a major architecture rewrite.
+
+**Guardrails**
+
+- The CLI calls the engine: no second implementation of capture, diffing, metrics or the baseline
+  lifecycle, and no dashboard server required to run a comparison.
+- The capture surface stays closed — registered routes on loopback origins, the same allow-list the
+  console enforces. No arbitrary public URL scanning.
+- An imported bundle cannot write outside the store, cannot overwrite an approved version, and cannot
+  change what is active by accident.
+- The web console and its baseline lifecycle keep working unchanged.

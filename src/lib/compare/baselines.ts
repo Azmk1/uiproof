@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  PROJECT_BASELINES_DIRNAME,
   baselineImageUrl,
   baselineScopeKey,
   isValidBaselineVersionFileName,
@@ -10,12 +11,14 @@ import {
   resolveBaselineLockPath,
   resolveBaselineManifestPath,
   resolveBaselineVersionPath,
+  resolveBaselinesDir,
   scopeKindOfManifest,
   versionFileName,
 } from "./baseline-paths";
 import { decodePng } from "./diff";
 import { ComparisonError } from "./errors";
 import { LockTimeoutError, withFileLock } from "./file-lock";
+import { sha256Hex, verifyImageIntegrity } from "./integrity";
 import { readArtifact, readReport, scopeKeyOf } from "./storage";
 import { getTarget, getViewport } from "./targets";
 import type { BaselineManifest, BaselineReference, BaselineScope, BaselineVersion, ViewportPreset } from "./types";
@@ -471,6 +474,217 @@ export async function readBaselineImage(
       throw new ComparisonError("baseline_version_unknown", cause.message, { cause });
     }
     throw new ComparisonError("baseline_not_found", "That baseline image is no longer on disk.", { cause });
+  }
+}
+
+/**
+ * Every baseline this machine has stored, in a stable order. Used by the CLI to report
+ * status and to build a portable bundle; the web console never needs it.
+ *
+ * Discovery is deliberately defensive: a directory that is not a valid scope or viewport
+ * is skipped rather than guessed at, and a manifest that does not belong to the scope it
+ * sits in is reported as unreadable by `readBaselineManifest` instead of being trusted.
+ */
+export async function listStoredBaselines(
+  cwd?: string,
+): Promise<Array<{ readonly scope: BaselineScope; readonly viewportId: string; readonly manifest: BaselineManifest }>> {
+  const baselinesDir = resolveBaselinesDir(cwd);
+  const found: Array<{ scope: BaselineScope; viewportId: string }> = [];
+
+  async function collect(scope: BaselineScope, directory: string): Promise<void> {
+    const viewports = await readdir(directory, { withFileTypes: true }).catch(() => []);
+    for (const entry of viewports) {
+      if (!entry.isDirectory() || !getViewport(entry.name)) continue;
+      found.push({ scope, viewportId: entry.name });
+    }
+  }
+
+  const targets = await readdir(baselinesDir, { withFileTypes: true }).catch(() => []);
+  for (const target of targets) {
+    if (!target.isDirectory()) continue;
+    if (target.name !== PROJECT_BASELINES_DIRNAME) {
+      const scope = tryScope({ kind: "demo", targetId: target.name });
+      if (scope) await collect(scope, path.join(baselinesDir, target.name));
+      continue;
+    }
+    const projects = await readdir(path.join(baselinesDir, target.name), { withFileTypes: true }).catch(() => []);
+    for (const project of projects) {
+      if (!project.isDirectory()) continue;
+      const routes = await readdir(path.join(baselinesDir, target.name, project.name), { withFileTypes: true }).catch(() => []);
+      for (const route of routes) {
+        if (!route.isDirectory()) continue;
+        const scope = tryScope({ kind: "project", projectId: project.name, routeId: route.name });
+        if (scope) await collect(scope, path.join(baselinesDir, target.name, project.name, route.name));
+      }
+    }
+  }
+
+  const stored: Array<{ scope: BaselineScope; viewportId: string; manifest: BaselineManifest }> = [];
+  for (const entry of found.sort((a, b) =>
+    baselineScopeKey(a.scope).localeCompare(baselineScopeKey(b.scope)) || a.viewportId.localeCompare(b.viewportId),
+  )) {
+    const manifest = await readBaselineManifest(entry.scope, entry.viewportId, cwd);
+    if (manifest) stored.push({ ...entry, manifest });
+  }
+  return stored;
+}
+
+function tryScope(value: unknown): BaselineScope | null {
+  try {
+    return parseBaselineScope(value);
+  } catch {
+    return null;
+  }
+}
+
+/** Reads one approved version's bytes from the store, for export. */
+export async function readBaselineVersionBytes(
+  scope: unknown,
+  viewportId: unknown,
+  versionId: unknown,
+  cwd?: string,
+): Promise<Buffer> {
+  if (!isValidBaselineVersionId(versionId)) {
+    throw new ComparisonError("baseline_version_unknown", `Unknown baseline version: ${String(versionId)}`);
+  }
+  return readBaselineImage(scope, viewportId, versionFileName(versionId), cwd);
+}
+
+/**
+ * Installs a version that came from a portable bundle.
+ *
+ * This is the one write path that has no local run behind it, so it repeats the store's
+ * invariants rather than trusting the bundle: the image must decode, the version id must
+ * be one of ours, an existing version is never overwritten (a different image under the
+ * same id is a conflict, an identical one is a no-op), and the manifest is updated under
+ * the same cross-process lock as an approval. It is also an explicit act: unless
+ * `activate` is set, importing a version never changes which reference new runs use.
+ */
+export interface ImportBaselineVersionInput {
+  readonly scope: unknown;
+  readonly viewportId: unknown;
+  readonly versionId: unknown;
+  readonly png: Buffer;
+  /** Recorded hashes the import has already checked; re-verified here as a second gate. */
+  readonly expectedSha256?: string;
+  readonly approvedAt: string;
+  readonly sourceReportId: string;
+  readonly capturedRoute: string;
+  readonly note?: string | null;
+  readonly routeName?: string | null;
+  readonly origin?: string | null;
+  readonly targetLabel?: string | null;
+  readonly activate?: boolean;
+  /** Store directory; the default is the resolved `UIPROOF_DATA_DIR`. */
+  readonly cwd?: string;
+}
+
+export interface ImportBaselineVersionResult {
+  readonly outcome: "added" | "already-present";
+  readonly manifest: BaselineManifest;
+  readonly version: BaselineVersion;
+  readonly activeVersionId: string | null;
+}
+
+export async function importBaselineVersion(input: ImportBaselineVersionInput): Promise<ImportBaselineVersionResult> {
+  const scope = requireScope(input.scope);
+  const viewport = requireViewport(input.viewportId);
+  if (!isValidBaselineVersionId(input.versionId)) {
+    throw new ComparisonError(
+      "portable_bundle_invalid",
+      `Unknown baseline version id: ${String(input.versionId)}.`,
+    );
+  }
+  const versionId = input.versionId;
+  const label = baselineScopeKey(scope);
+  const versionPath = resolveBaselineVersionPath(scope, viewport.id, versionId, input.cwd);
+
+  const size = verifyImageIntegrity(input.png, { sha256: input.expectedSha256 }, `${versionId} of ${label}`);
+
+  const existing = await readBaselineManifest(scope, viewport.id, input.cwd);
+  const duplicate = existing?.versions.find((version) => version.id === versionId);
+  if (duplicate) {
+    const onDisk = await readFile(versionPath).catch(() => null);
+    if (onDisk && sha256Hex(onDisk) === sha256Hex(input.png)) {
+      // An identical image is not re-imported, but `activate` is still honoured: importing
+      // the same bundle again with `--activate` is how a developer turns a version that is
+      // already on this machine into the reference, without a second copy of anything.
+      if (input.activate && existing!.activeVersionId !== versionId) {
+        const activated = await mutateManifest(scope, viewport.id, input.cwd, (current, attempt) => {
+          const base = current ?? existing!;
+          return {
+            ...base,
+            activeVersionId: versionId,
+            revision: base.revision + 1 + attempt,
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        return {
+          outcome: "already-present",
+          manifest: activated,
+          version: duplicate,
+          activeVersionId: activated.activeVersionId,
+        };
+      }
+      return { outcome: "already-present", manifest: existing!, version: duplicate, activeVersionId: existing!.activeVersionId };
+    }
+    throw new ComparisonError(
+      "baseline_version_conflict",
+      `${versionId} already exists for ${label} at ${viewport.label} with different image content. Approved versions are immutable — import a different version or clean the store deliberately.`,
+    );
+  }
+
+  await mkdir(path.dirname(versionPath), { recursive: true });
+  try {
+    // `wx`, like every other approved image: an import can create a version, never rewrite one.
+    await writeFile(versionPath, input.png, { flag: "wx" });
+  } catch (cause) {
+    throw new ComparisonError(
+      "baseline_version_conflict",
+      `${versionId} already exists on disk for ${label} at ${viewport.label}.`,
+      { cause },
+    );
+  }
+
+  const imported: BaselineVersion = {
+    id: versionId,
+    scope: scope.kind,
+    targetId: scope.kind === "demo" ? scope.targetId : scope.projectId,
+    projectId: scope.kind === "project" ? scope.projectId : null,
+    routeId: scope.kind === "project" ? scope.routeId : null,
+    routeName: scope.kind === "project" ? (input.routeName ?? null) : null,
+    viewportId: viewport.id,
+    viewportLabel: viewport.label,
+    approvedAt: input.approvedAt,
+    sourceReportId: input.sourceReportId,
+    capturedRoute: input.capturedRoute,
+    origin: input.origin ?? null,
+    width: size.width,
+    height: size.height,
+    bytes: input.png.byteLength,
+    note: input.note ?? null,
+    imageUrl: baselineImageUrl(scope, viewport.id, versionId),
+  };
+
+  try {
+    const manifest = await mutateManifest(scope, viewport.id, input.cwd, (current, attempt) => ({
+      scope: scope.kind,
+      targetId: imported.targetId,
+      targetLabel: current?.targetLabel ?? input.targetLabel ?? imported.targetId,
+      projectId: scope.kind === "project" ? scope.projectId : null,
+      routeId: scope.kind === "project" ? scope.routeId : null,
+      viewportId: viewport.id,
+      viewportLabel: viewport.label,
+      activeVersionId: input.activate ? versionId : (current?.activeVersionId ?? null),
+      revision: (current?.revision ?? 0) + 1 + attempt,
+      updatedAt: new Date().toISOString(),
+      versions: [...(current?.versions ?? []), imported],
+    }));
+    return { outcome: "added", manifest, version: imported, activeVersionId: manifest.activeVersionId };
+  } catch (cause) {
+    // The image never reached a manifest, so it must not linger as an orphan.
+    await rm(versionPath, { force: true }).catch(() => undefined);
+    throw cause;
   }
 }
 

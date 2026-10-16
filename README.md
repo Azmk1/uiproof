@@ -10,8 +10,11 @@ classified as pass or regression against your tolerance — with the baseline ve
 recorded in the report. Phase 3 points it at your own work: **register an application that is already
 running on this machine**, pick one of its routes, capture it, approve it, and every later run against
 that route is drift-checked against your approved screen. Captures stay inside the origins you
-registered. Later phases add accessibility and design-consistency checks, GitHub integration, and
-AI-assisted repair proposals — none of that is wired up yet.
+registered. Phase 4 makes it a tool you can gate on: a **CLI with documented exit codes**, `0` pass /
+`1` regression / `2` the tool could not answer, and **portable approved baselines** — bundles you
+commit next to your code and a clean CI runner can load and compare against. Later phases add
+accessibility and design-consistency checks, GitHub integration, and AI-assisted repair proposals —
+none of that is wired up yet.
 
 ---
 
@@ -40,6 +43,12 @@ AI-assisted repair proposals — none of that is wired up yet.
 - **Local persistence.** Screenshots and the JSON report are written to `.uiproof/data`, so a page
   refresh — or a server restart — keeps the last run, the approved baseline and the version history
   on screen.
+- **A CLI that a pipeline can gate on.** `pnpm uiproof capture|check|projects|baselines` runs the same
+  engine without the dashboard, prints one JSON document for automation, and separates "your UI
+  changed" (`1`) from "the tool could not answer" (`2`).
+- **Portable, integrity-checked baselines.** `baselines export` writes a bundle you can commit;
+  `baselines import --activate` loads it on a machine that has never seen UIProof, verifying every
+  image against its recorded SHA-256, byte count and dimensions first.
 - **A deliberately closed capture surface.** The engine only ever navigates to compiled demo routes
   or to routes named in the registration file, on the loopback origins that file declares. A browser
   request cannot name a URL: it sends a project id and a route id, and the server resolves them
@@ -467,6 +476,133 @@ Properties, all of them verified rather than intended:
 
 ---
 
+## The command line
+
+`pnpm uiproof <command>` runs the same engine as the console, in a process a pipeline can gate on. It
+never needs the dashboard server, an API key or a hosted service: it reads the registration file,
+drives Chromium, and reads and writes the store at `UIPROOF_DATA_DIR` (default `.uiproof/data`) — the
+same store the console uses, so the two are interchangeable on one machine. Nothing about the
+comparison is reimplemented: the CLI calls `runComparison`, the baseline store's own readers and
+writers, and the portable-bundle module.
+
+| Command | What it does |
+| ------- | ------------ |
+| `uiproof capture --project <id> --route <id>` | Captures the route and stores the screenshot |
+| `uiproof check --project <id> --route <id>` | Captures the route and diffs it against its approved baseline |
+| `uiproof projects` | Lists the projects and routes in the registration file |
+| `uiproof baselines [status]` | Shows the approved baselines, their versions and which one is active |
+| `uiproof baselines export (--project <id> \| --all) --out <dir>` | Writes a portable baseline bundle |
+| `uiproof baselines import --from <dir> [--activate]` | Loads a bundle into this machine's store |
+| `uiproof --help` · `uiproof --version` | Help and version |
+
+Options: `--project`, `--route`, `--viewport desktop|tablet|mobile`, `--config <file>`,
+`--storage <dir>`, `--tolerance <pct>`, `--approve`, `--note <text>`, `--out`, `--from`, `--activate`,
+`--all`, `--json`, `--quiet`. `pnpm uiproof --help` is the full text; `pnpm build:cli` refreshes the
+bundle without running a command.
+
+```bash
+pnpm uiproof projects --config examples/ci/uiproof.config.json
+pnpm uiproof capture --project example-app --route home --approve --note "first approval"
+pnpm uiproof check --project example-app --route home
+```
+
+### Exit codes
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | the comparison passed — or a capture was stored, because a capture is never a pass |
+| `1` | a visual regression was detected |
+| `2` | configuration, baseline, browser or infrastructure error: the tool could not answer |
+
+These are the interface. `2` is deliberately distinct from `1`: an unusable registration file, a
+missing baseline, an unknown project or route, a route that redirects off its origin, an application
+that is not listening, a Chromium that is not installed, or a bundle that fails its integrity check
+must never look like "your UI changed". A capture prints "a capture is not a pass" and exits `0`
+without claiming a verdict, and a failing `check` prints its measurement:
+
+```text
+REGRESSION  0.9712% of the viewport changed (9,945 of 1,024,000 px), above the 0.1% tolerance
+Reference: bl-f29097f0-e19f-4d31-9f7f-f546f7f91ad7 · approve with: uiproof capture --approve
+```
+
+### Machine-readable output
+
+`--json` prints **exactly one JSON document on stdout** and moves the human trail to stderr, so
+`uiproof check --json | jq .status` works. Use `pnpm --silent uiproof …` when you redirect stdout,
+otherwise pnpm's own banner lands in the file.
+
+```json
+{
+  "command": "check",
+  "status": "regression",
+  "exitCode": 1,
+  "source": { "projectId": "example-app", "routeId": "home", "viewportId": "desktop" },
+  "tolerance": 0.1,
+  "baseline": { "versionId": "bl-…", "approvedAt": "…", "sourceReportId": "run-…" },
+  "report": { "id": "run-…", "metrics": { "changedPixels": 9945, "comparedPixels": 1024000, "changePercentage": 0.9712 } },
+  "reportPath": "/…/.uiproof/data/reports/run-…",
+  "diff": { "url": "/api/artifacts/run-…/diff.png" }
+}
+```
+
+The `report` object *is* the persisted report: it is written to `<store>/reports/<run id>/report.json`
+before the CLI prints it, and the CLI suite asserts the two are equal rather than trusting the
+transcript.
+
+### Portable approved baselines
+
+The store is runtime state — git-ignored, container-ephemeral, absent on a fresh CI runner. A
+**bundle** is the same approvals in a form you can commit next to the code:
+
+```
+examples/uiproof-baselines/
+├── uiproof-baselines.json                                     format, scopes, versions, SHA-256
+└── scopes/projects/example-app/home/desktop/versions/
+    └── bl-18d99168-047b-4730-9fee-9a28f0f80639.png            one immutable approved image
+```
+
+`baselines export` writes it and `baselines import --from <dir>` loads it. The rules an import
+enforces, each of them unit tested against hand-edited manifests:
+
+- **Nothing in a bundle is trusted.** Every path is re-derived from the validated scope, and a path
+  that is not the canonical one — or that would leave the bundle — is refused, so an imported bundle
+  cannot write outside the store.
+- **Every image is verified.** Byte count, dimensions and SHA-256 are checked before anything is
+  written. A truncated, swapped or edited PNG is `baseline_integrity_failed` (exit `2`) and the store
+  is left exactly as it was.
+- **Approval stays explicit.** An import stores versions; it changes which one is *active* only when
+  `--activate` asks for it. A version that exists but was never activated cannot be compared against.
+- **Versions stay immutable.** A version id that already exists with different content is a conflict,
+  never an overwrite. Importing the same bundle twice is a no-op; adding `--activate` to the second
+  import activates the version that is already on the machine.
+- **Reports stay out of bundles.** A bundle carries approvals, never results: the report of the run
+  that produced an image stays in the store.
+
+### Gating a CI pipeline
+
+[.github/workflows/visual-regression.yml](.github/workflows/visual-regression.yml) is a working
+example for a clean Ubuntu runner with no pre-existing UIProof data: install, `playwright install
+chromium`, start [examples/example-app](examples/example-app) and wait for `/healthz`, import
+[examples/uiproof-baselines](examples/uiproof-baselines), gate, and upload the reports, the run's JSON
+and the bundle as build artifacts. It never needs a paid API, a model or a hosted backend.
+
+The two comparisons the brief asks for are both there:
+
+- **the unchanged page passes** — `uiproof check` exits `0`;
+- **a real UI change fails the job** — `views/home.changed.html` is copied over `views/home.html`, the
+  same command exits `1`, the view is restored, and the next run exits `0` again.
+
+**One honest caveat, and the strategy it implies.** A baseline is a screenshot, so it only matches
+pixel-for-pixel in the environment that rendered it: the committed example bundle was approved on
+Windows, and a Linux runner resolves the example application's `system-ui` font stack to a different
+face. The workflow therefore uses the committed bundle to prove the portable path on a clean machine
+(it imports, verifies and reports), and produces the reference its own gate is measured against with
+`capture --approve` on the runner. When one image has to gate several machines, generate it in the
+environment that gates — the same container image, ideally — and commit that artifact; the workflow's
+last step exports the runner-approved bundle for exactly that handoff.
+
+---
+
 ## Determinism
 
 A comparison is only meaningful if an unchanged page produces a byte-identical capture. Captures pin
@@ -513,6 +649,8 @@ content), raise the tolerance or exclude the region deliberately — never fake 
 | `pnpm verify`        | lint → typecheck → test → build → test:e2e          |
 | `pnpm setup:browser` | Install the Chromium build Playwright drives        |
 | `pnpm example:app`   | Serve the bundled example application on port 4173   |
+| `pnpm uiproof …`     | The UIProof CLI (see [The command line](#the-command-line)) |
+| `pnpm build:cli`     | Rebuild the CLI bundle without running a command      |
 
 `pnpm test:e2e` needs `pnpm build` to have run first: it starts `next start` on a scratch port with a
 throwaway `UIPROOF_DATA_DIR`, so it never touches your own runs and baselines. `pnpm verify` chains
@@ -524,8 +662,8 @@ typecheck, unit tests, production build, Chromium install, browser suite.
 
 ## Testing
 
-`pnpm test` runs **155 unit tests** across 13 files, all covering the engine, the guards, the
-baseline store and the registration parser rather than the UI shell:
+`pnpm test` runs **177 unit tests** across 15 files, all covering the engine, the guards, the baseline
+store, the portable bundles and the CLI's parser rather than the UI shell:
 
 | File                            | Coverage                                                                                               |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -542,16 +680,20 @@ baseline store and the registration parser rather than the UI shell:
 | `lib/compare/source-selection.test.ts` | The console's source model: scope keys, request shapes, baseline endpoint paths, per-source defaults |
 | `lib/compare/file-lock.test.ts` | The cross-process lock: serialised critical sections, no stealing from a live owner, abandoned-lock takeover, timeout |
 | `lib/format-time.test.ts`       | Relative time, UTC clock, duration formatting                                                          |
+| `cli/args.test.ts`              | The CLI's argument parser: commands and subcommands, value and boolean flags, `--tolerance` bounds, unknown options, `--help` winning over a missing option, and the documented exit codes in the help text |
+| `cli/portable.test.ts`          | Portable bundles, treated as hostile input: canonical paths and traversal refusal, hand-edited manifests (wrong format, unknown scope, unknown viewport, non-canonical file, malformed hash, duplicate id, an active version that is not listed), import into a store that does not exist yet, idempotent re-import, activation only on request, a tampered image writing nothing, a version-id conflict keeping the approved bytes, export refusing to rewrite a bundled image |
 
 `diff.test.ts` is the important one: it builds synthetic PNGs in memory and asserts **exact** pixel
 counts (e.g. a 10 × 10 block changed on a 100 × 100 white canvas is exactly 100 pixels and 1 %).
 `baselines.test.ts` is the second: it writes real files into a temporary data directory and checks the
 lifecycle semantics — nothing overwritten, nothing adopted across target/viewport, and a restore that
-keeps the original approval timestamp.
+keeps the original approval timestamp. `cli/portable.test.ts` is the third: it builds bundles with the
+real export path, then edits the manifest by hand the way a truncated download or a tampered commit
+would look, and asserts that every one of them is refused.
 
 ### Browser suite
 
-`pnpm test:e2e` runs **33 tests** across 4 files in real Chromium, against a real `next start` server
+`pnpm test:e2e` runs **46 tests** across 5 files in real Chromium, against a real `next start` server
 on a throwaway data directory ([e2e/](e2e)):
 
 | File | Coverage |
@@ -560,6 +702,7 @@ on a throwaway data directory ([e2e/](e2e)):
 | `accessibility.test.ts` | The Phase 1 audit regressions, pinned as measurements rather than claims: flex prose in reading order, every control ≥ 24 px, the slider hairline inside a 24 px hit area, zoom buttons at full size, WCAG AA contrast in both colour schemes, no overflow at 390 px, a focus ring on every keyboard stop, and the timeline reachable by keyboard with a ring on the focused bar |
 | `baseline-lifecycle.test.ts` | The seven-step lifecycle below, driven through the UI wherever the UI has an action for it |
 | `project-integration.test.ts` | The Phase 3 workflow against an independent application: start it, register it, capture a route, approve it, change the application's real UI, detect the regression, restore it, pass again, restart UIProof and find everything still there — plus the refusals |
+| `cli.test.ts` | The Phase 4 workflow through the real CLI process (`node scripts/uiproof.mjs …`, exit codes read from the process): help and version, usage errors, `projects`, a missing baseline, `capture --approve` reporting *captured* and never a pass, a passing `check` whose JSON equals the persisted report, a real UI change exiting `1` and recovering to `0`, unknown project/route/viewport, an off-origin redirect, an unreachable application, export/import on a fresh working directory, activation only on request, a tampered bundle, and `baselines status` naming the approved run |
 
 The lifecycle, in the order the suite checks it:
 
@@ -652,6 +795,32 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
   the whole file reported unusable and a capture answered `500 project_config_invalid`; a dev server
   that is not listening → `502 project_unreachable` naming the origin and port; cross-site approval →
   `403`.
+- **CLI (Phase 4), one session against [examples/example-app](examples/example-app):** with a store
+  that did not exist yet — `baselines import --from examples/uiproof-baselines --activate` added 1
+  version, verified against its SHA-256, byte count and dimensions → `capture --approve` → `check`
+  **exit 0, 0 / 1,024,000 px** → `views/home.changed.html` copied over `views/home.html` → **exit 1,
+  0.9712 % (9,945 px), `REGRESSION`** → view restored → **exit 0** again. The JSON of the failing run
+  was `status=regression changed=0.97119140625% (tolerance 0.1%)`, and the same object is what
+  `<store>/reports/<run id>/report.json` holds. Exporting afterwards wrote both versions (the imported
+  one and the runner-approved one) into a 94.3 KB bundle.
+- **Exit codes (Phase 4), each produced by the real process:** pass → `0`; capture → `0` with status
+  `captured`; regression → `1`; missing baseline → `2 baseline_not_found`; unknown project → `2
+  project_not_registered`; unknown route → `2 route_not_registered`; unknown viewport → `2` usage
+  error; `--tolerance 500` → `2`; a route that redirects off its origin → `2 capture_redirected`; an
+  application that is not listening → `2 project_unreachable`; a bundle whose PNG was byte-flipped →
+  `2 baseline_integrity_failed`, with the store left untouched.
+- **Two bugs the CLI suite found, both fixed rather than papered over.** Every CLI invocation used to
+  keep its Chromium alive until the engine's 60 s idle timer fired, so a command that did its work in
+  1.1 s took 62 s to exit — the shared browser is right for a server and wrong for a one-shot process,
+  which now closes it on the way out (13 tests went from 507 s to 30 s). And `baselines import
+  --activate` silently ignored activation when the version was already on the machine, so the
+  documented clean-runner commands left the store with a baseline that was never active; an import
+  that finds identical bytes now honours `--activate` and activates that version, with a unit test
+  pinning it.
+- **The example CI workflow (Phase 4), rehearsed step by step on this machine against the same commands
+  the workflow runs:** health wait → import from the committed bundle → `capture --approve` on the
+  runner → gate passes (`0`) → deliberate regression (`1`, JSON asserted) → revert → gate passes (`0`)
+  → export, with the example application left byte-identical to git afterwards.
 - **Stability:** five repeat runs at one revision → identical changed-pixel counts; the control
   target → 0 changed pixels, verdict `pass`, three times.
 
@@ -695,6 +864,17 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
 - **The browser suite is smoke-level.** It covers the console flow, the audit regressions and the
   baseline lifecycle. It does not diff artefacts per pixel, and it runs against a throwaway data
   directory rather than a long-lived history.
+- **The CLI runs from this repository.** It is not published to npm yet (the package is `private`), so
+  a consumer needs the checkout: `pnpm uiproof` bundles `src/cli` with esbuild into the git-ignored
+  `.uiproof/cli/uiproof.mjs` and runs it. Shipping a package is a later decision, not a Phase 4 one.
+- **A baseline is only pixel-exact for the environment that rendered it.** Fonts, rasteriser and
+  Chromium build all differ across machines, which is why the CI example approves its own reference
+  and uses the committed bundle to prove the portable path rather than to gate across platforms.
+- **The CLI captures registered routes only.** `--project` and `--route` must exist in the registration
+  file; there is no "compare this URL" mode. That is the same capture surface as the console, on
+  purpose.
+- **One route and one viewport per invocation.** There is no watch mode, no multi-route run and no
+  queue: gating several routes is a loop in your own pipeline until a later phase adds it.
 - **No visual diffing of the console itself.** Nothing screenshots the dashboard UI, so a styling
   regression in the console would not be caught by the tool that is meant to catch styling
   regressions.
@@ -703,17 +883,20 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
 
 ## Next milestone
 
-**Phase 4 — make the reference trustworthy and the gate useful.**
+**Phase 5 — make the gate sharper, and cheaper to run everywhere.**
 
 1. **Ignore regions.** Selector- or rectangle-based masks, recorded in the report, so a volatile
    area can be excluded visibly instead of by lowering the global tolerance.
 2. **Tie runs to code.** A run against a real project's page is worth much more if the report carries
-   the git SHA (and dirty state) it was captured at, so a regression names the change that caused it.
-3. **Multi-viewport approvals.** One approval covering desktop/tablet/mobile, with per-viewport pass
+   the git SHA (and dirty state) it was captured at, so a regression names the change that caused it —
+   and a gate can say which commit moved the pixels.
+3. **One command for a whole project.** `uiproof check --all` across every registered route and
+   viewport, with a single rolled-up exit code and per-route results, instead of a shell loop.
+4. **Publish the CLI.** Ship `uiproof` as a package with a pinned Chromium dependency so a consumer
+   does not need this repository at all, and keep the store format unchanged.
+5. **Multi-viewport approvals.** One approval covering desktop/tablet/mobile, with per-viewport pass
    or fail in a single report.
-4. **A CLI and an exit code.** `uiproof compare --fail-on regression --project my-app --route home` so
-   a developer's own CI can gate on UIProof's verdict, not just this repository's suite.
-5. **Then accessibility scanning** (axe-core plus the measurements this repository already makes), and
+6. **Then accessibility scanning** (axe-core plus the measurements this repository already makes), and
    only afterwards GitHub integration and AI repair proposals.
 
 ---

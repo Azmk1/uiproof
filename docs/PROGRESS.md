@@ -3,11 +3,11 @@
 **North star:** an automated frontend quality platform that detects visual regressions,
 accessibility problems and design inconsistencies — see `docs/GOAL.md`.
 
-**Current milestone:** Phase 3 — real application integration and security hardening.
+**Current milestone:** Phase 4 — CLI, portable baselines and CI quality gates.
 **Status:** complete, verified, committed.
 
 Phase 1 = 8 / 8 criteria (100 %) · Phase 2 = 10 / 10 criteria (100 %) · Phase 3 =
-**12 / 12 criteria (100 %)**.
+12 / 12 criteria (100 %) · Phase 4 = **12 / 12 criteria (100 %)**.
 
 ---
 
@@ -337,6 +337,76 @@ URLs and without an authentication system (the brief ruled one out unless it was
 
 ---
 
+## Phase 4 — the CLI, portable baselines and a CI gate
+
+**Goal:** turn UIProof from a console you watch into a tool a pipeline can gate on. Run it from a
+terminal without the dashboard, get a documented exit code, and carry an approved baseline to a clean
+CI runner as a committable artifact.
+
+### Acceptance criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | **CLI built on the existing engine** — `capture`, `check`, `projects`, `baselines`, `--help`, `--version`, explicit project/route/viewport/config/storage/tolerance options, no dashboard server | **Verified** | `src/cli/{args,main,output,exit-codes}.ts` + `scripts/uiproof.mjs` (esbuild bundle, git-ignored output). `main.ts` calls `runComparison`, `approveBaseline`, the store's readers and the portable module — no second diff, no HTTP. 13 CLI end-to-end tests run the real process |
+| 2 | **Documented, deterministic exit codes** — `0` pass, `1` regression, `2` everything else, capture never reported as a pass | **Verified** | `exit-codes.ts` + the help text + the README table. Measured: pass `0`, capture `0` with `status: "captured"`, regression `1`, missing baseline `2 baseline_not_found`, unknown project/route `2 project_not_registered` / `route_not_registered`, unknown viewport and `--tolerance 500` `2` usage errors, off-origin redirect `2 capture_redirected`, unreachable app `2 project_unreachable` |
+| 3 | **Readable output plus optional structured JSON** | **Verified** | `--json` writes exactly one JSON document to stdout and moves the human trail to stderr (`baselines status --json` verified to parse); the suite asserts the CLI's `report` object equals `<store>/reports/<id>/report.json`. `pnpm --silent` documented for redirection because pnpm's banner would otherwise land in the file |
+| 4 | **Portable baseline format with metadata and clear scope ownership** | **Verified** | `src/cli/portable.ts`: `uiproof-baselines.json` + `scopes/(demo|projects)/…/<viewport>/versions/bl-<uuid>.png`; every version carries id, path, SHA-256, bytes, dimensions, `approvedAt`, `sourceReportId`, `capturedRoute`, note; scopes are `project:<id>/<route>` or `demo:<targetId>` |
+| 5 | **Integrity validation of imported images** | **Verified** | Byte count, dimensions and SHA-256 are verified before a write (`lib/compare/integrity.ts`); a byte flipped in a bundle PNG → exit `2 baseline_integrity_failed` with the store untouched. 15 unit tests build bundles with the real export path and then edit the manifest by hand |
+| 6 | **Explicit approval only, no automatic replacement, no overwrites, reports kept apart** | **Verified** | An import stores versions and activates only with `--activate`; a version id that already exists with different bytes is a conflict; an identical image is a no-op that still honours `--activate` (a bug the CLI suite found and this commit fixes); bundles never contain run reports |
+| 7 | **Documented strategy for committing baseline artifacts** | **Verified** | README *Portable approved baselines* / *Gating a CI pipeline*, `examples/uiproof-baselines/README.md` (what it holds, how it was produced, the rendering-environment caveat), and a real committed bundle: 1 version, 47.2 KB PNG + manifest, 52 KB total |
+| 8 | **Working GitHub Actions example, clean runner, no pre-existing data** | **Verified (rehearsed locally)** | `.github/workflows/visual-regression.yml`: install → `playwright install --with-deps chromium` → start `examples/example-app` and wait for `/healthz` → import the committed bundle → approve on the runner → gate (unchanged `0`) → deliberate regression (`1`) → revert (`0`) → export → upload reports, JSON, bundle and the app log. Every command was rehearsed in this order on this machine with the same config; a run on a GitHub-hosted runner is pending the push in this commit (see limitations) |
+| 9 | **End-to-end verification with real Chromium** | **Verified** | `e2e/cli.test.ts`, 13 tests, real process, real Chromium: unchanged → `0`, changed → `1`, missing baseline → `2`, unknown project/route ↦ `2`, reachable-check on an unreachable app → `2`, JSON equals the persisted report, export/import into a working directory that has never run UIProof → `0` then `1` on a real edit, `--activate` honoured, tampered bundle → `2`. Numbers below |
+| 10 | **Existing suites preserved and extended** | **Verified** | Unit 155 → **177** tests / 13 → **15** files; browser 33 → **46** tests / 4 → **5** files. All previous tests still pass unmodified |
+| 11 | **Security and reliability maintained** | **Verified** | The CLI captures registered routes only (no URL input, same allow-list as the console); imported paths are re-derived from the validated scope and `resolveBundlePath` refuses anything leaving the bundle; unknown viewport/option/tolerance and missing bundle are typed usage errors; the console, its endpoints and the baseline lifecycle are untouched, and the browser suite still drives them |
+| 12 | **Constraints respected, docs updated, full chain green** | **Verified** | No AI, no auth, no cloud database, no microservices, no npm publish (`private: true`), no architecture rewrite, Phase 1–3 APIs and stored data unchanged. `pnpm lint` · `pnpm typecheck` · `pnpm test` 177/177 · `pnpm build` · `pnpm test:e2e` 46/46, plus the workflow rehearsal |
+
+### Milestone log
+
+| Milestone | Outcome |
+|-----------|---------|
+| M21 — CLI core | `args.ts` (pure parser, 7 tests), `exit-codes.ts`, `output.ts` (stdout/stderr split), `main.ts` dispatching to the engine |
+| M22 — bundling and launcher | `scripts/uiproof.mjs`: esbuild bundles `src/cli/main.ts` into the git-ignored `.uiproof/cli/uiproof.mjs`, rebuilds only when a source file is newer, keeps playwright/pixelmatch/pngjs external, and forwards the child's exit code |
+| M23 — portable bundles | `integrity.ts` (SHA-256, byte, dimension and decodability checks) and `portable.ts` (bundle layout, strict manifest parser, export from the store, import through the store's immutable write path) |
+| M24 — store import path | `importBaselineVersion` and `listStoredBaselines` in `baselines.ts`: `wx` writes, manifest mutation under the existing lock, return-to-caller activation decision |
+| M25 — CLI integration suite | `e2e/cli.test.ts` — 13 tests through the real process; found and fixed two real defects (below) |
+| M26 — CI example | `examples/ci/uiproof.config.json`, the committed bundle plus its README, and `.github/workflows/visual-regression.yml`, rehearsed step by step here |
+| M27 — verification | lint, typecheck, 177 unit tests, production build, 46 browser tests, CLI suite, workflow rehearsal, docs |
+
+### Phase 4 verification evidence
+
+```
+pnpm lint        clean (0 errors, 0 warnings)
+pnpm typecheck   clean
+pnpm test        177 tests / 15 files passed   (was 155 / 13)
+pnpm build       ✓ compiled
+pnpm test:e2e    46 tests / 5 files passed     (was 33 / 4; cli.test.ts: 13 tests in 30 s)
+```
+
+| Check | Result |
+|-------|--------|
+| CLI, clean store | `baselines import --activate` added 1 verified version; `check` → `PASS 0% (0 / 1,024,000 px)`, exit `0` |
+| CLI, real regression | `views/home.html` ← `home.changed.html`: `REGRESSION 0.9712% (9,945 / 1,024,000 px)`, exit `1`; JSON `status=regression changed=0.97119140625% (tolerance 0.1%)` |
+| CLI, recovery | View restored → `PASS 0%`, exit `0`; the approved baseline was never touched (1 version, still active) |
+| JSON vs persisted report | Equal in the suite (passing run and failing run) |
+| Fresh working directory | Export → import into a directory with no prior UIProof data → `0` on the unchanged page, `1` after a real edit, `0` after restore |
+| Committed bundle | `examples/uiproof-baselines`: 1 version, `project:example-app/home` @ desktop, 47.2 KB PNG + manifest, 52 KB total, SHA-256 recorded and re-verified on every import |
+| Workflow rehearsal | Health wait → import → approve → `0` → deliberate change → `1` (JSON parsed) → revert → `0` → export (2 versions, 94.3 KB) → app left byte-identical to git |
+
+**Two real bugs the CLI suite found, both fixed at the source:**
+
+1. **Every CLI invocation kept Chromium alive for ~61 s.** The engine shares one browser and closes it
+   on a 60 s idle timer — correct for a server, wrong for a one-shot process, where the browser handle
+   held the event loop open. A command that did its work in 1.1 s took 62.04 s to exit, measured. The
+   CLI now closes the browser in a `finally` block; the same measurement is 1.8 s, and the CLI suite
+   went from 507 s to 30 s.
+2. **`baselines import --activate` silently ignored activation on an already-present version.**
+   Importing without `--activate` and then again with it left `activeVersionId` null, so the
+   documented clean-runner commands produced a store that could not be compared against. An import
+   that finds identical bytes now activates that version under the manifest lock, and a unit test
+   pins it (added, not rewritten, alongside the 14 existing bundle tests).
+
+---
+
 ## Decisions made during implementation
 
 - **Route groups** `(console)` / `(fixtures)` keep console chrome off the screens under test.
@@ -374,6 +444,18 @@ URLs and without an authentication system (the brief ruled one out unless it was
 - Cross-process safety assumes one machine and a local filesystem; there is no distributed lock.
 - Registered projects are loopback-only, and a page that redirects to another origin is refused
   rather than captured.
+- The CLI runs from this repository (the package is still `private`); a consumer needs the checkout,
+  and `pnpm uiproof` rebuilds the git-ignored bundle when a source file changes.
+- An approved baseline is only pixel-exact for the environment that rendered it. The committed example
+  bundle was approved on Windows, so the CI example uses it to prove the portable path and approves
+  its own reference on the runner; a team that wants one image to gate several machines should generate
+  it in the environment that gates.
+- The example workflow's steps were rehearsed here command by command, but the workflow itself has not
+  run on a GitHub-hosted runner yet (that needs the push in this commit). Everything it calls is the
+  same CLI the 13 end-to-end tests exercise.
+- `capture` and `check` cover registered routes only; multi-route or multi-viewport gating is a loop in
+  the consumer's pipeline, and there is no watch mode. Bundles may carry demo scopes, but the CLI cannot
+  capture a demo fixture.
 - The browser suite is smoke-level and runs against throwaway data directories; the console UI itself
   is not screenshot-diffed.
 - The environment used for verification cannot composite browser frames reliably, so UI verification
@@ -385,9 +467,10 @@ None outstanding.
 
 ## Next approved action
 
-Phase 3 is delivered and verified on `main`: UIProof captures and drift-checks an independent local
-application, with per-project baselines, a restricted capture network and the loopback bind as its
-real access control. The recommended next milestone is **Phase 4 — make the reference trustworthy and
-the gate useful**: ignore regions recorded in the report, a git SHA per run, multi-viewport approvals,
-and a CLI with a real exit code so UIProof can gate someone else's CI. Details at the end of the
-README.
+Phase 4 is delivered and verified on `main`: `pnpm uiproof` runs the engine without the dashboard,
+separates "your UI changed" (`1`) from "the tool could not answer" (`2`), exports and imports
+integrity-checked baseline bundles, and the example workflow loads an approved baseline on a clean
+runner and demonstrates both a passing and a failing comparison. The recommended next milestone is
+**Phase 5 — make the gate sharper, and cheaper to run everywhere**: ignore regions recorded in the
+report, a git SHA per run, `uiproof check --all` across a whole project, a published CLI package, and
+multi-viewport approvals. Details at the end of the README.

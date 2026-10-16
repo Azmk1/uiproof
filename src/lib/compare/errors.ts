@@ -23,7 +23,11 @@ export type ComparisonErrorCode =
   | "project_not_registered"
   | "route_not_registered"
   | "project_config_invalid"
-  | "project_unreachable";
+  | "project_unreachable"
+  // Phase 4: portable baselines.
+  | "baseline_integrity_failed"
+  | "baseline_version_conflict"
+  | "portable_bundle_invalid";
 
 const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   invalid_target: 400,
@@ -48,6 +52,9 @@ const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   route_not_registered: 400,
   project_config_invalid: 500,
   project_unreachable: 502,
+  baseline_integrity_failed: 400,
+  baseline_version_conflict: 409,
+  portable_bundle_invalid: 400,
 };
 
 export class ComparisonError extends Error {
