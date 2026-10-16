@@ -2,7 +2,7 @@
   "format": "uiproof-baselines",
   "formatVersion": 1,
   "generator": "uiproof 0.1.0",
-  "exportedAt": "2026-10-16T03:01:47.168Z",
+  "exportedAt": "2026-10-16T03:15:55.998Z",
   "scopes": [
     {
       "kind": "project",
@@ -14,19 +14,19 @@
       "origin": "http://127.0.0.1:4173",
       "viewportId": "desktop",
       "viewportLabel": "Desktop",
-      "activeVersionId": "bl-c6198d4d-aaab-49e2-b321-c7e78964dc19",
+      "activeVersionId": "bl-dc76c084-9a22-4bdb-ad9a-c8df9d128028",
       "versions": [
         {
-          "id": "bl-c6198d4d-aaab-49e2-b321-c7e78964dc19",
-          "file": "scopes/projects/example-app/home/desktop/versions/bl-c6198d4d-aaab-49e2-b321-c7e78964dc19.png",
-          "sha256": "28399ef61ab1a1e8fe14d462cf6f42fc01d4657214b87009c67a04ac1cc530e1",
-          "bytes": 70020,
+          "id": "bl-dc76c084-9a22-4bdb-ad9a-c8df9d128028",
+          "file": "scopes/projects/example-app/home/desktop/versions/bl-dc76c084-9a22-4bdb-ad9a-c8df9d128028.png",
+          "sha256": "4b9c2b3e7fe7d0d69d5f54c073cbbcce78af6faaf440a8b84dd7b77bb46c2bea",
+          "bytes": 69638,
           "width": 1280,
           "height": 800,
-          "approvedAt": "2026-10-16T03:01:45.297Z",
-          "sourceReportId": "run-8951e3b4-0846-4595-9127-3d6381589e41",
+          "approvedAt": "2026-10-16T03:15:54.823Z",
+          "sourceReportId": "run-7bd83575-7107-403f-987f-efcf0e6044c6",
           "capturedRoute": "/",
-          "note": "approved in the pinned rendering environment (v1.64.1-noble)"
+          "note": "approval of the proof branch's UI, generated in the pinned image"
         }
       ]
     }
