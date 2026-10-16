@@ -1,6 +1,10 @@
 import type {
+  ActivateBaselineResponse,
   ApiErrorBody,
+  ApproveBaselineResponse,
+  BaselineResponse,
   CatalogResponse,
+  ComparisonMode,
   ComparisonReport,
   ReportResponse,
   ReportsResponse,
@@ -77,6 +81,8 @@ export interface RunComparisonInput {
   readonly targetId: string;
   readonly viewportId: string;
   readonly maxDiffPercent: number;
+  readonly mode: ComparisonMode;
+  readonly variantId: string | null;
 }
 
 export async function createComparison(input: RunComparisonInput): Promise<ComparisonReport> {
@@ -86,4 +92,43 @@ export async function createComparison(input: RunComparisonInput): Promise<Compa
     body: JSON.stringify(input),
   });
   return response.report;
+}
+
+/** The approved baseline (and its history) for one target/viewport pair. */
+export async function fetchBaseline(targetId: string, viewportId: string): Promise<BaselineResponse> {
+  return requestJson<BaselineResponse>(
+    `/api/baselines/${encodeURIComponent(targetId)}/${encodeURIComponent(viewportId)}`,
+  );
+}
+
+export interface ApproveBaselineInput {
+  readonly targetId: string;
+  readonly viewportId: string;
+  readonly sourceReportId: string;
+  readonly note?: string;
+}
+
+/** Explicitly adopts a stored run's capture as a new baseline version. */
+export async function approveBaseline(input: ApproveBaselineInput): Promise<ApproveBaselineResponse> {
+  return requestJson<ApproveBaselineResponse>("/api/baselines", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+/** Makes an existing version active again — the explicit replace/restore action. */
+export async function activateBaselineVersion(input: {
+  readonly targetId: string;
+  readonly viewportId: string;
+  readonly versionId: string;
+}): Promise<ActivateBaselineResponse> {
+  return requestJson<ActivateBaselineResponse>(
+    `/api/baselines/${encodeURIComponent(input.targetId)}/${encodeURIComponent(input.viewportId)}/activate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ versionId: input.versionId }),
+    },
+  );
 }

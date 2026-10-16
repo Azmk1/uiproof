@@ -28,7 +28,7 @@ function SiteHeader() {
           <span>UIProof</span>
         </Link>
         <Badge variant="outline" className="hidden sm:inline-flex">
-          phase 1
+          phase 2
         </Badge>
 
         <nav aria-label="Primary" className="ml-auto flex items-center gap-1">

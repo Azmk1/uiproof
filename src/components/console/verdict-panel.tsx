@@ -1,9 +1,9 @@
-import { CircleCheckBig, TriangleAlert } from "lucide-react";
+import { CircleCheckBig, GitCompareArrows, ShieldCheck, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { formatBytes, formatChangePercentage } from "@/lib/compare/metrics";
 import type { ComparisonReport } from "@/lib/compare/types";
-import { formatClockTime, formatDuration } from "@/lib/format-time";
-import { cn } from "@/lib/utils";
+import { formatClockTime, formatDuration, formatRelativeTime } from "@/lib/format-time";
+import { cn, shortId } from "@/lib/utils";
 
 function MetricTile({
   label,
@@ -66,6 +66,9 @@ export function DiffLegend() {
 export function VerdictPanel({ report }: { readonly report: ComparisonReport }) {
   const isRegression = report.status === "regression";
   const { metrics } = report;
+  // Reports written before Phase 2 have no mode; those runs compared the fixture pair.
+  const mode = report.mode === "baseline" ? "baseline" : "fixture";
+  const baseline = report.baseline ?? null;
 
   return (
     <section
@@ -79,6 +82,10 @@ export function VerdictPanel({ report }: { readonly report: ComparisonReport }) 
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-3">
             <span className="label-caps">Verdict</span>
+            <Badge variant="neutral">
+              {mode === "baseline" ? <ShieldCheck /> : <GitCompareArrows />}
+              {mode === "baseline" ? "approved baseline" : "fixture pair"}
+            </Badge>
             {isRegression ? (
               <Badge variant="regress">
                 <TriangleAlert />
@@ -113,10 +120,21 @@ export function VerdictPanel({ report }: { readonly report: ComparisonReport }) 
         <dl className="flex w-full shrink-0 flex-col gap-2 sm:w-[290px]">
           <MetaRow label="Target" value={report.target.label} mono={false} />
           <MetaRow
-            label="Routes"
-            value={`${report.target.baselinePath} → ${report.target.currentPath}`}
+            label={mode === "baseline" ? "Reference" : "Routes"}
+            value={
+              mode === "baseline" && baseline
+                ? `${shortId(baseline.versionId)} · ${baseline.capturedRoute}`
+                : `${report.target.baselinePath} → ${report.target.currentPath}`
+            }
           />
+          <MetaRow label="Captured" value={report.target.currentPath} />
           <MetaRow label="Viewport" value={`${report.viewport.label} · ${report.viewport.width}×${report.viewport.height}`} />
+          {baseline ? (
+            <MetaRow
+              label="Baseline"
+              value={`approved ${formatRelativeTime(baseline.approvedAt)} from ${shortId(baseline.sourceReportId)}`}
+            />
+          ) : null}
           <MetaRow label="Run" value={report.id} />
           <MetaRow label="Finished" value={formatClockTime(report.createdAt)} />
         </dl>

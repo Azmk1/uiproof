@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.mts",
+    "verify": "eslint && tsc --noEmit && vitest run && next build && vitest run --config vitest.e2e.config.mts",
     "setup:browser": "playwright install chromium"
   },
   "dependencies": {

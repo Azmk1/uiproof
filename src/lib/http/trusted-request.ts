@@ -45,3 +45,37 @@ export function isTrustedRequest(facts: RequestFacts): boolean {
   if (facts.origin === null) return true;
   return isSameHost(facts.origin, facts.host);
 }
+
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"]);
+
+/**
+ * True when a request arrived on a loopback address.
+ *
+ * UIProof's state-changing baseline endpoints are deliberately local-only: the dev
+ * server also listens on the LAN interface, so "same origin" alone would let anyone
+ * on the network approve baselines for a project they can reach. The host is read
+ * from the request, never from a body or a query parameter.
+ */
+export function isLoopbackHost(host: string | null): boolean {
+  if (!host) return false;
+  const trimmed = host.trim().toLowerCase();
+  if (trimmed.length === 0) return false;
+  const withoutPort = trimmed.startsWith("[")
+    ? trimmed.slice(0, trimmed.indexOf("]") + 1)
+    : trimmed.split(":")[0];
+  if (LOOPBACK_HOSTNAMES.has(withoutPort)) return true;
+  // 127.0.0.0/8 is loopback in full, not just 127.0.0.1.
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(withoutPort);
+}
+
+/**
+ * Guard for state-changing local operations. Both conditions must hold: the request is
+ * trusted (same-origin rules above) and it reached UIProof over loopback. An explicit
+ * `UIPROOF_ALLOW_REMOTE_BASELINES=1` opts a deliberate remote deployment out — it is off
+ * by default, so a plain `next start` on a shared host cannot be administered remotely.
+ */
+export function isLocalAdminRequest(facts: RequestFacts): boolean {
+  if (!isTrustedRequest(facts)) return false;
+  if (process.env.UIPROOF_ALLOW_REMOTE_BASELINES === "1") return true;
+  return isLoopbackHost(facts.host);
+}

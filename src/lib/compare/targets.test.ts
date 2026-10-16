@@ -5,8 +5,12 @@ import {
   VIEWPORT_PRESETS,
   buildCaptureUrl,
   getTarget,
+  getTargetVariants,
+  getVariant,
   getViewport,
   isAllowedDemoRoute,
+  resolveCurrentRoute,
+  targetSupportsMode,
 } from "./targets";
 
 describe("isAllowedDemoRoute", () => {
@@ -37,6 +41,19 @@ describe("isAllowedDemoRoute", () => {
     expect(isAllowedDemoRoute("")).toBe(false);
   });
 
+  it("rejects every form of query string, including plausible ones", () => {
+    for (const route of [
+      "/demo/current?variant=original",
+      "/demo/current?redirect=https://evil.example",
+      "/demo/current?",
+      "/demo/current??variant=original",
+      "/demo/../admin?variant=original",
+      "/demo/current?variant=original%00",
+    ]) {
+      expect(isAllowedDemoRoute(route), route).toBe(false);
+    }
+  });
+
   it("rejects absurdly long routes", () => {
     expect(isAllowedDemoRoute(`/demo/${"a".repeat(200)}`)).toBe(false);
   });
@@ -50,10 +67,18 @@ describe("buildCaptureUrl", () => {
     expect(url.search).toBe("");
   });
 
+  it("produces a URL with no query or fragment, whatever the route", () => {
+    const url = buildCaptureUrl("http://localhost:3000", "/demo/reverted");
+    expect(url.pathname).toBe("/demo/reverted");
+    expect(url.search).toBe("");
+    expect(url.toString()).toBe("http://localhost:3000/demo/reverted");
+  });
+
   it("refuses untrusted routes and origins", () => {
     expect(() => buildCaptureUrl("http://localhost:3000", "https://example.com")).toThrow(RangeError);
     expect(() => buildCaptureUrl("http://localhost:3000", "/demo/../secrets")).toThrow(RangeError);
     expect(() => buildCaptureUrl("ftp://localhost:3000", "/demo/baseline")).toThrow(RangeError);
+    expect(() => buildCaptureUrl("http://localhost:3000", "/demo/current?token=1")).toThrow(RangeError);
   });
 });
 
@@ -78,5 +103,44 @@ describe("catalogue", () => {
     expect(getTarget("unknown")).toBeUndefined();
     expect(getTarget(undefined)).toBeUndefined();
     expect(getTarget({ id: "invoice-summary" })).toBeUndefined();
+  });
+
+  it("declares supported modes and defaults to the fixture pair", () => {
+    const invoice = getTarget("invoice-summary");
+    const control = getTarget("baseline-control");
+    expect(invoice && targetSupportsMode(invoice, "baseline")).toBe(true);
+    expect(invoice && targetSupportsMode(invoice, "fixture")).toBe(true);
+    expect(control && targetSupportsMode(control, "baseline")).toBe(false);
+    expect(COMPARISON_TARGETS.every((target) => target.modes.includes(target.defaultMode))).toBe(true);
+  });
+
+  it("only exposes allow-listed variant routes", () => {
+    for (const target of COMPARISON_TARGETS) {
+      const variants = getTargetVariants(target);
+      expect(variants.length === 0 || target.defaultVariantId !== undefined).toBe(true);
+      for (const variant of variants) {
+        expect(isAllowedDemoRoute(variant.route)).toBe(true);
+      }
+      if (variants.length > 0) {
+        expect(getVariant(target, target.defaultVariantId)?.id).toBe(target.defaultVariantId);
+      }
+    }
+  });
+});
+
+describe("resolveCurrentRoute", () => {
+  const invoice = getTarget("invoice-summary")!;
+
+  it("defaults to the shipped page and switches to the reverted one", () => {
+    expect(resolveCurrentRoute(invoice, undefined)).toBe("/demo/current");
+    expect(resolveCurrentRoute(invoice, "shipped")).toBe("/demo/current");
+    expect(resolveCurrentRoute(invoice, "reverted")).toBe("/demo/reverted");
+  });
+
+  it("refuses unknown states and states a target cannot offer", () => {
+    expect(() => resolveCurrentRoute(invoice, "drifted")).toThrow(RangeError);
+    const control = getTarget("baseline-control")!;
+    expect(resolveCurrentRoute(control, undefined)).toBe("/demo/baseline");
+    expect(() => resolveCurrentRoute(control, "shipped")).toThrow(RangeError);
   });
 });

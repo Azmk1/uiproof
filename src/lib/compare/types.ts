@@ -5,6 +5,13 @@
 
 export type ComparisonStatus = "pass" | "regression";
 
+/**
+ * How the reference side of a run is obtained.
+ * - `fixture`  — the target's paired baseline route is captured alongside the current route.
+ * - `baseline` — a fresh capture of the current route is diffed against an approved baseline image.
+ */
+export type ComparisonMode = "fixture" | "baseline";
+
 export type ArtifactName = "baseline" | "current" | "diff";
 
 export interface DemoRoute {
@@ -21,6 +28,14 @@ export interface ViewportPreset {
   readonly deviceScaleFactor: number;
 }
 
+export interface FixtureVariantOption {
+  readonly id: string;
+  readonly label: string;
+  /** The allow-listed route a run captures while this variant is selected. */
+  readonly route: string;
+  readonly summary: string;
+}
+
 export interface ComparisonTarget {
   readonly id: string;
   readonly label: string;
@@ -31,6 +46,17 @@ export interface ComparisonTarget {
   readonly expectedChanges: readonly string[];
   /** Plain-language expectation shown next to the target in the console. */
   readonly expectedOutcome: string;
+  /** Comparison modes this target supports, in the order the console should offer them. */
+  readonly modes: readonly ComparisonMode[];
+  readonly defaultMode: ComparisonMode;
+  /**
+   * Switchable states of the page under test. Selecting a variant only changes which
+   * allow-listed route is captured — it exists so a deliberate page change (and the
+   * return to the original) can be demonstrated and tested without editing source.
+   */
+  readonly variants?: readonly FixtureVariantOption[];
+  /** Must name one of `variants` when variants are declared. */
+  readonly defaultVariantId?: string;
 }
 
 export interface ArtifactInfo {
@@ -61,13 +87,61 @@ export interface ComparisonEngineInfo {
   readonly totalMs: number;
 }
 
+export interface BaselineReference {
+  readonly versionId: string;
+  readonly approvedAt: string;
+  readonly sourceReportId: string;
+  /** Route the approved baseline was captured from. */
+  readonly capturedRoute: string;
+  readonly width: number;
+  readonly height: number;
+  /** Application-relative URL of the approved baseline PNG. */
+  readonly imageUrl: string;
+}
+
+/** One approved baseline image. Versions are append-only; nothing is overwritten. */
+export interface BaselineVersion {
+  readonly id: string;
+  readonly targetId: string;
+  readonly viewportId: string;
+  readonly viewportLabel: string;
+  readonly approvedAt: string;
+  readonly sourceReportId: string;
+  /** Route this baseline was captured from. */
+  readonly capturedRoute: string;
+  readonly width: number;
+  readonly height: number;
+  readonly bytes: number;
+  readonly note: string | null;
+  readonly imageUrl: string;
+}
+
+export interface BaselineManifest {
+  readonly targetId: string;
+  readonly targetLabel: string;
+  readonly viewportId: string;
+  readonly viewportLabel: string;
+  /** The version a new run compares against. `null` is only reachable by editing disk state. */
+  readonly activeVersionId: string | null;
+  /** Increments on every metadata change; used to detect concurrent approvals. */
+  readonly revision: number;
+  readonly updatedAt: string;
+  readonly versions: readonly BaselineVersion[];
+}
+
 export interface ComparisonReport {
   readonly id: string;
   readonly createdAt: string;
   readonly status: ComparisonStatus;
+  /** Absent on reports written before Phase 2; the console treats those as `fixture`. */
+  readonly mode?: ComparisonMode;
+  readonly variantId?: string | null;
+  /** The approved baseline this run compared against, when it ran in baseline mode. */
+  readonly baseline?: BaselineReference | null;
   readonly target: {
     readonly id: string;
     readonly label: string;
+    /** Reference side: the paired fixture route, or the route the approved baseline came from. */
     readonly baselinePath: string;
     readonly currentPath: string;
   };
@@ -83,7 +157,10 @@ export interface ReportSummary {
   readonly status: ComparisonStatus;
   readonly targetId: string;
   readonly targetLabel: string;
+  readonly viewportId: string;
   readonly viewportLabel: string;
+  readonly mode: ComparisonMode;
+  readonly variantId: string | null;
   readonly changePercentage: number;
 }
 
@@ -91,6 +168,22 @@ export interface RunComparisonRequest {
   readonly targetId?: unknown;
   readonly viewportId?: unknown;
   readonly maxDiffPercent?: unknown;
+  readonly mode?: unknown;
+  readonly variantId?: unknown;
+}
+
+export interface ApproveBaselineRequest {
+  readonly targetId?: unknown;
+  readonly viewportId?: unknown;
+  /** Run whose `current.png` becomes the approved baseline. */
+  readonly sourceReportId?: unknown;
+  readonly note?: unknown;
+}
+
+export interface ActivateBaselineRequest {
+  readonly targetId?: unknown;
+  readonly viewportId?: unknown;
+  readonly versionId?: unknown;
 }
 
 export interface CatalogResponse {
@@ -101,7 +194,22 @@ export interface CatalogResponse {
     readonly maxDiffPercent: number;
     readonly pixelThreshold: number;
     readonly maxHistory: number;
+    readonly defaultMode: ComparisonMode;
   };
+}
+
+export interface BaselineResponse {
+  /** `null` when nothing has been approved for this target/viewport pair yet. */
+  readonly baseline: BaselineManifest | null;
+}
+
+export interface ApproveBaselineResponse {
+  readonly baseline: BaselineManifest;
+  readonly version: BaselineVersion;
+}
+
+export interface ActivateBaselineResponse {
+  readonly baseline: BaselineManifest;
 }
 
 export interface ReportsResponse {
@@ -116,5 +224,7 @@ export interface ApiErrorBody {
   readonly error: {
     readonly code: string;
     readonly message: string;
+    /** Present when the failure has an obvious next step for the console. */
+    readonly hint?: string;
   };
 }

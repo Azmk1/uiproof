@@ -30,6 +30,10 @@ export async function POST(request: Request) {
       targetId: body.targetId,
       viewportId: body.viewportId,
       maxDiffPercent: body.maxDiffPercent,
+      // Both optional: a Phase 1 body (target + viewport + tolerance) still runs the
+      // fixture comparison exactly as before.
+      mode: body.mode,
+      variantId: body.variantId,
       origin: resolveCaptureOrigin(request),
     });
     return NextResponse.json({ report }, { headers: { "Cache-Control": "no-store" } });

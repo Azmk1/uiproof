@@ -58,7 +58,11 @@ function toSummary(report: ComparisonReport): ReportSummary {
     status: report.status,
     targetId: report.target.id,
     targetLabel: report.target.label,
+    viewportId: report.viewport.id,
     viewportLabel: report.viewport.label,
+    // Reports written before Phase 2 have no mode; they were all fixture comparisons.
+    mode: report.mode === "baseline" ? "baseline" : "fixture",
+    variantId: report.variantId ?? null,
     changePercentage: report.metrics.changePercentage,
   };
 }

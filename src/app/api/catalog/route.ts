@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { DEFAULT_MAX_DIFF_PERCENT, DEFAULT_PIXEL_THRESHOLD, MAX_HISTORY } from "@/lib/compare/metrics";
+import { DEFAULT_MODE } from "@/lib/compare/run-options";
 import { COMPARISON_TARGETS, DEFAULT_VIEWPORT_ID, VIEWPORT_PRESETS } from "@/lib/compare/targets";
 import type { CatalogResponse } from "@/lib/compare/types";
 
@@ -17,6 +18,7 @@ export async function GET() {
       maxDiffPercent: DEFAULT_MAX_DIFF_PERCENT,
       pixelThreshold: DEFAULT_PIXEL_THRESHOLD,
       maxHistory: MAX_HISTORY,
+      defaultMode: DEFAULT_MODE,
     },
   };
   return NextResponse.json(body);

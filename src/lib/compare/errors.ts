@@ -4,9 +4,16 @@ export type ComparisonErrorCode =
   | "invalid_target"
   | "invalid_viewport"
   | "invalid_options"
+  | "mode_unavailable"
   | "untrusted_request"
+  | "local_only"
   | "invalid_report_id"
   | "report_not_found"
+  | "baseline_not_found"
+  | "baseline_unreadable"
+  | "baseline_source_mismatch"
+  | "baseline_version_unknown"
+  | "baseline_conflict"
   | "browser_unavailable"
   | "capture_failed"
   | "comparison_failed"
@@ -16,9 +23,16 @@ const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   invalid_target: 400,
   invalid_viewport: 400,
   invalid_options: 400,
+  mode_unavailable: 400,
   untrusted_request: 403,
+  local_only: 403,
   invalid_report_id: 400,
   report_not_found: 404,
+  baseline_not_found: 404,
+  baseline_unreadable: 500,
+  baseline_source_mismatch: 400,
+  baseline_version_unknown: 400,
+  baseline_conflict: 409,
   browser_unavailable: 503,
   capture_failed: 502,
   comparison_failed: 500,
