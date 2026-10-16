@@ -84,6 +84,23 @@ ci_require_cmd() {
   command -v "$1" >/dev/null 2>&1 || ci_fail "$1 is required but not on PATH."
 }
 
+# A container job runs as root over a workspace owned by the runner user, and git refuses to
+# read a repository it does not consider its own ("detected dubious ownership"). The exception
+# `actions/checkout` installs lives in a different HOME than the one these scripts run under, so
+# every script that reads the repository marks it safe itself.
+#
+# The exception names the workspace directory (never `*`), is appended to whatever the
+# environment already configures, and lasts for this process and its children only: nothing
+# global is written. (git has read GIT_CONFIG_COUNT/KEY_n/VALUE_n since 2.31.)
+ci_trust_the_workspace() {
+  local workspace="${GITHUB_WORKSPACE:-$PWD}"
+  local index="${GIT_CONFIG_COUNT:-0}"
+  export GIT_CONFIG_COUNT=$((index + 1))
+  export "GIT_CONFIG_KEY_${index}=safe.directory"
+  export "GIT_CONFIG_VALUE_${index}=${workspace}"
+  ci_info "git: $workspace marked safe for this process (container jobs run as another user)"
+}
+
 ci_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | cut -d' ' -f1

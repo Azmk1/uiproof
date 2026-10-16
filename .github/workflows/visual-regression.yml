@@ -62,6 +62,12 @@ env:
   # built from `$RUNNER_TEMP` inside the steps below: `runner` is not a context a workflow-level
   # `env` may use.)
   TRUSTED_REF: ${{ github.event.pull_request.base.ref || github.ref_name }}
+  # A container job runs as root over a workspace owned by the runner user, and git refuses to
+  # read a repository it does not consider its own. This marks the workspace — and only the
+  # workspace — as safe for these processes; nothing global is written.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: ${{ github.workspace }}
 
 defaults:
   run:

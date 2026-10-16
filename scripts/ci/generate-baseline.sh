@@ -97,6 +97,9 @@ mkdir -p "$STORE" "$ARTIFACTS"
 
 trap 'ci_stop_app' EXIT
 
+ci_require_cmd git
+ci_trust_the_workspace
+
 COMMIT="$(git rev-parse HEAD 2>/dev/null || echo "not a git checkout")"
 DIRTY="$(git status --porcelain -- examples/example-app 2>/dev/null || true)"
 

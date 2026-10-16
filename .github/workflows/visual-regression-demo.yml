@@ -47,6 +47,11 @@ env:
   UIPROOF_BUNDLE_PATH: examples/uiproof-baselines
   # The working directories are built from `$RUNNER_TEMP` inside the steps: `runner` is not a
   # context a workflow-level `env` may use.
+  # A container job runs as root over a workspace owned by the runner user, and git refuses to
+  # read a repository it does not consider its own (the last step below reads it deliberately).
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: ${{ github.workspace }}
 
 defaults:
   run:

@@ -70,6 +70,7 @@ case "$INTO" in
   / | "" ) ci_fail "trusted-baseline.sh: refusing to use $INTO as the output directory." ;;
 esac
 ci_require_cmd git
+ci_trust_the_workspace
 
 ci_heading "Trusted baseline"
 ci_info "ref:    $FROM_REF"

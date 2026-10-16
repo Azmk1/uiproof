@@ -171,6 +171,10 @@ run_check() { # <store> <name> [extra args...]
     --config "$CONFIG" --storage "$store" --json "$@" || CHECK_STATUS=$?
 }
 
+if command -v git >/dev/null 2>&1; then
+  ci_trust_the_workspace
+fi
+
 TRUSTED_VERSION="$(ci_bundle_active_version "$BUNDLE/uiproof-baselines.json" "$PROJECT" "$ROUTE" "$VIEWPORT")"
 [ -n "$TRUSTED_VERSION" ] ||
   ci_fail "walkthrough.sh: the trusted bundle has no approved baseline for $PROJECT/$ROUTE at $VIEWPORT."
