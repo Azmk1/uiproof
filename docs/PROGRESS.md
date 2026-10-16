@@ -222,6 +222,12 @@ pnpm test:e2e    33 tests / 4 files passed (Chromium, real production servers)
 The browser suite now runs **four** servers: the Phase 1/2 one on a scratch port, the registered
 project one, and short-lived ones for the unsafe-configuration and unreachable-application probes.
 
+The same sequence ran on GitHub Actions for the Phase 3 commits
+([run 38833704895](https://github.com/Azmk1/uiproof/actions/runs/38833704895), `main` at `c436158`)
+and passed every step: install (`--frozen-lockfile`) → lint → typecheck → **155 unit tests** →
+production build → Chromium install → **33 browser tests**, including the eleven-step walkthrough
+against the example application. Nothing in this milestone is claimed from a local-only run.
+
 Live measurement of the workflow, production server, example application on its own port:
 
 | Step | Result |
