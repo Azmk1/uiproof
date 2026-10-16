@@ -586,6 +586,12 @@ chromium`, start [examples/example-app](examples/example-app) and wait for `/hea
 [examples/uiproof-baselines](examples/uiproof-baselines), gate, and upload the reports, the run's JSON
 and the bundle as build artifacts. It never needs a paid API, a model or a hosted backend.
 
+Verified on GitHub Actions: run 1 on `3ad6b88` passed on `ubuntu-latest` in 44 s and uploaded the
+reports, the failing run's JSON, the exported bundle and the application log as the
+`uiproof-visual-regression` artifact; `ci.yml` on the same commit passed too, which means the whole
+browser suite — including the 13 CLI tests — is green on Linux as well as on the machine it was
+written on.
+
 The two comparisons the brief asks for are both there:
 
 - **the unchanged page passes** — `uiproof check` exits `0`;

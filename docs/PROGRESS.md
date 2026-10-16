@@ -354,7 +354,7 @@ CI runner as a committable artifact.
 | 5 | **Integrity validation of imported images** | **Verified** | Byte count, dimensions and SHA-256 are verified before a write (`lib/compare/integrity.ts`); a byte flipped in a bundle PNG → exit `2 baseline_integrity_failed` with the store untouched. 15 unit tests build bundles with the real export path and then edit the manifest by hand |
 | 6 | **Explicit approval only, no automatic replacement, no overwrites, reports kept apart** | **Verified** | An import stores versions and activates only with `--activate`; a version id that already exists with different bytes is a conflict; an identical image is a no-op that still honours `--activate` (a bug the CLI suite found and this commit fixes); bundles never contain run reports |
 | 7 | **Documented strategy for committing baseline artifacts** | **Verified** | README *Portable approved baselines* / *Gating a CI pipeline*, `examples/uiproof-baselines/README.md` (what it holds, how it was produced, the rendering-environment caveat), and a real committed bundle: 1 version, 47.2 KB PNG + manifest, 52 KB total |
-| 8 | **Working GitHub Actions example, clean runner, no pre-existing data** | **Verified (rehearsed locally)** | `.github/workflows/visual-regression.yml`: install → `playwright install --with-deps chromium` → start `examples/example-app` and wait for `/healthz` → import the committed bundle → approve on the runner → gate (unchanged `0`) → deliberate regression (`1`) → revert (`0`) → export → upload reports, JSON, bundle and the app log. Every command was rehearsed in this order on this machine with the same config; a run on a GitHub-hosted runner is pending the push in this commit (see limitations) |
+| 8 | **Working GitHub Actions example, clean runner, no pre-existing data** | **Verified** | `.github/workflows/visual-regression.yml`: install → `playwright install --with-deps chromium` → start `examples/example-app` and wait for `/healthz` → import the committed bundle → approve on the runner → gate (unchanged `0`) → deliberate regression (`1`) → revert (`0`) → export → upload reports, JSON, bundle and the app log. Rehearsed command by command locally, then ran on GitHub: run 1 on `3ad6b88` **succeeded** on `ubuntu-latest` in 44 s and uploaded the `uiproof-visual-regression` artifact (914,987 bytes). `ci.yml` on the same commit also passed |
 | 9 | **End-to-end verification with real Chromium** | **Verified** | `e2e/cli.test.ts`, 13 tests, real process, real Chromium: unchanged → `0`, changed → `1`, missing baseline → `2`, unknown project/route ↦ `2`, reachable-check on an unreachable app → `2`, JSON equals the persisted report, export/import into a working directory that has never run UIProof → `0` then `1` on a real edit, `--activate` honoured, tampered bundle → `2`. Numbers below |
 | 10 | **Existing suites preserved and extended** | **Verified** | Unit 155 → **177** tests / 13 → **15** files; browser 33 → **46** tests / 4 → **5** files. All previous tests still pass unmodified |
 | 11 | **Security and reliability maintained** | **Verified** | The CLI captures registered routes only (no URL input, same allow-list as the console); imported paths are re-derived from the validated scope and `resolveBundlePath` refuses anything leaving the bundle; unknown viewport/option/tolerance and missing bundle are typed usage errors; the console, its endpoints and the baseline lifecycle are untouched, and the browser suite still drives them |
@@ -391,6 +391,8 @@ pnpm test:e2e    46 tests / 5 files passed     (was 33 / 4; cli.test.ts: 13 test
 | Fresh working directory | Export → import into a directory with no prior UIProof data → `0` on the unchanged page, `1` after a real edit, `0` after restore |
 | Committed bundle | `examples/uiproof-baselines`: 1 version, `project:example-app/home` @ desktop, 47.2 KB PNG + manifest, 52 KB total, SHA-256 recorded and re-verified on every import |
 | Workflow rehearsal | Health wait → import → approve → `0` → deliberate change → `1` (JSON parsed) → revert → `0` → export (2 versions, 94.3 KB) → app left byte-identical to git |
+| GitHub Actions, run 1 | `visual-regression.yml` on `3ad6b88`: **success** in 44 s (02:21:56Z → 02:22:43Z), one artifact `uiproof-visual-regression` (914,987 bytes) |
+| GitHub Actions, CI | `ci.yml` on the same commit: **success** (02:22:00Z → 02:23:58Z) — lint, typecheck, 177 unit tests, production build and all **46** browser tests on Linux |
 
 **Two real bugs the CLI suite found, both fixed at the source:**
 
@@ -450,9 +452,9 @@ pnpm test:e2e    46 tests / 5 files passed     (was 33 / 4; cli.test.ts: 13 test
   bundle was approved on Windows, so the CI example uses it to prove the portable path and approves
   its own reference on the runner; a team that wants one image to gate several machines should generate
   it in the environment that gates.
-- The example workflow's steps were rehearsed here command by command, but the workflow itself has not
-  run on a GitHub-hosted runner yet (that needs the push in this commit). Everything it calls is the
-  same CLI the 13 end-to-end tests exercise.
+- The example workflow gates one route at one viewport, and its gate reference is approved on the
+  runner (see the rendering-environment item above), so a green run proves the pipeline and this
+  repository's example, not that a baseline approved elsewhere will match pixel-for-pixel.
 - `capture` and `check` cover registered routes only; multi-route or multi-viewport gating is a loop in
   the consumer's pipeline, and there is no watch mode. Bundles may carry demo scopes, but the CLI cannot
   capture a demo fixture.
