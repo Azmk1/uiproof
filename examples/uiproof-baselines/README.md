@@ -51,14 +51,18 @@ timezone `UTC`, light colour scheme, reduced motion, the viewport preset's size 
 scale factor, service workers blocked, colour profile `srgb`, no font hinting, hidden
 scrollbars, and fonts and images awaited before the shot.
 
-**Reproducibility, measured rather than asserted.** Three separate runs of
-`generate-baseline.sh` in that image — one of them from a checkout with CRLF line endings —
-each produced **byte-identical** screenshots:
+**Reproducibility, measured rather than asserted.** Four separate runs of
+`generate-baseline.sh` in that image — three on the machine that developed this, one of them from a
+checkout with CRLF line endings, and once on a `ubuntu-latest` runner through the
+[update workflow](../../.github/workflows/baseline-update.yml)
+([run 38845231360](https://github.com/Azmk1/uiproof/actions/runs/38845231360)) — all produced
+**byte-identical** screenshots:
 `sha256:28399ef61ab1a1e8fe14d462cf6f42fc01d4657214b87009c67a04ac1cc530e1`, 70,020 bytes,
-1280 × 800. What that does *not* cover is honest to say out loud: a different font set, a
-different Chromium build, a different libc or a non-x86-64 host can each move pixels, so
-`docker pull` of another digest means "regenerate the baseline", not "the baseline is wrong"
-(see [docs/BASELINE-UPDATES.md](../../docs/BASELINE-UPDATES.md#what-is-and-is-not-pinned)).
+1280 × 800. That includes the CI-side check that matters most: a runner regenerating this bundle
+today gets exactly these bytes back. What it does *not* cover is honest to say out loud: a different
+font set, a different Chromium build, a different libc, another architecture or a page with live data
+can each move pixels, so a changed image digest means "regenerate the baseline", not "the baseline is
+wrong" (see [docs/BASELINE-UPDATES.md](../../docs/BASELINE-UPDATES.md#what-is-and-is-not-pinned)).
 
 ## How a gate uses it
 

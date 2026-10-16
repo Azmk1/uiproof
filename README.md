@@ -705,8 +705,8 @@ typecheck, unit tests, production build, Chromium install, browser suite.
 
 ## Testing
 
-`pnpm test` runs **177 unit tests** across 15 files, all covering the engine, the guards, the baseline
-store, the portable bundles and the CLI's parser rather than the UI shell:
+`pnpm test` runs **188 unit tests** across 16 files, all covering the engine, the guards, the baseline
+store, the portable bundles, the CLI's parser and the pinned CI environment rather than the UI shell:
 
 | File                            | Coverage                                                                                               |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -724,6 +724,7 @@ store, the portable bundles and the CLI's parser rather than the UI shell:
 | `lib/compare/file-lock.test.ts` | The cross-process lock: serialised critical sections, no stealing from a live owner, abandoned-lock takeover, timeout |
 | `lib/format-time.test.ts`       | Relative time, UTC clock, duration formatting                                                          |
 | `cli/args.test.ts`              | The CLI's argument parser: commands and subcommands, value and boolean flags, `--tolerance` bounds, unknown options, `--help` winning over a missing option, and the documented exit codes in the help text |
+| `lib/ci/pinned-environment.test.ts` | The CI configuration itself: the Playwright pin is exact and matches the image tag, the image is pinned by tag *and* digest, every workflow runs in that same image, the recorded Chromium revision matches the installed Playwright, the gate workflow contains no `capture` and no `--approve` and reads a base-branch ref, and no workflow-level `env` reaches for a context GitHub does not allow there |
 | `cli/portable.test.ts`          | Portable bundles, treated as hostile input: canonical paths and traversal refusal, hand-edited manifests (wrong format, unknown scope, unknown viewport, non-canonical file, malformed hash, duplicate id, an active version that is not listed), import into a store that does not exist yet, idempotent re-import, activation only on request, a tampered image writing nothing, a version-id conflict keeping the approved bytes, export refusing to rewrite a bundled image |
 
 `diff.test.ts` is the important one: it builds synthetic PNGs in memory and asserts **exact** pixel
@@ -863,7 +864,25 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
 - **The example CI workflow (Phase 4), rehearsed step by step on this machine against the same commands
   the workflow runs:** health wait → import from the committed bundle → `capture --approve` on the
   runner → gate passes (`0`) → deliberate regression (`1`, JSON asserted) → revert → gate passes (`0`)
-  → export, with the example application left byte-identical to git afterwards.
+  → export, with the example application left byte-identical to git afterwards. *(Phase 4.5 removed the
+  `capture --approve` from the gate; the walkthrough that still does it and checks the codes is a
+  separate workflow.)*
+- **The gate (Phase 4.5), in the pinned image and on GitHub:** `main` → `exit 0`, `changed: 0%`,
+  reference `bl-c6198d4d…`, `working tree copy: identical to the trusted bundle`. A pull request with
+  three real edits to the example application's view → `exit 1`, `REGRESSION 0.4404% of the viewport
+  changed (4,510 of 1,024,000 px)`, artifacts uploaded anyway. The same pull request bringing a bundle
+  that *matches* its own UI — loaded against that UI in the same image it reports `PASS 0% of the
+  viewport changed (0 of 1,024,000 px)`, so the approval was legitimate and pixel-exact — still exits
+  `1`: the log warns `the working tree copy … DIFFERS from the trusted bundle` and compares against the
+  base commit. Reverting the UI passes (`exit 0`) while the pull request keeps its bundle.
+- **The update path (Phase 4.5):** the `Approved baseline update` workflow, dispatched on `main`,
+  regenerated the bundle on a `ubuntu-latest` runner and produced a PNG with the **same** SHA-256 as
+  the committed one (`28399ef6…c530e1`, 70,020 bytes) — four independent generations, two machines, one
+  image — while committing nothing.
+- **The walkthrough (Phase 4.5), on `main` in the pinned image:** 17/17 assertions across seven
+  scenarios — `0` unchanged, `1` changed, `1` even with a rewritten bundle in the tree, `0` restored,
+  `2` missing baseline, `2` tampered image (naming both hashes), `2` unreachable application — and the
+  checkout clean afterwards.
 - **Stability:** five repeat runs at one revision → identical changed-pixel counts; the control
   target → 0 changed pixels, verdict `pass`, three times.
 
@@ -911,8 +930,14 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
   a consumer needs the checkout: `pnpm uiproof` bundles `src/cli` with esbuild into the git-ignored
   `.uiproof/cli/uiproof.mjs` and runs it. Shipping a package is a later decision, not a Phase 4 one.
 - **A baseline is only pixel-exact for the environment that rendered it.** Fonts, rasteriser and
-  Chromium build all differ across machines, which is why the CI example approves its own reference
-  and uses the committed bundle to prove the portable path rather than to gate across platforms.
+  Chromium build differ across machines, which is why the gate, the walkthrough and the generator all
+  run in one pinned image: the committed bundle is reproducible there (four runs, one image hash) and
+  nowhere else by assumption. A different digest or architecture means regenerating the baseline.
+- **The gate blocks only if the repository says so.** Requiring the `gate · trusted baseline` check,
+  requiring code-owner review, keeping branches up to date and restricting pushes to the base branch
+  are manual GitHub settings — a workflow cannot protect itself. Without them the gate is a signal.
+- **One route, one viewport per gate invocation.** Gating several routes is a loop over
+  `scripts/ci/run-gate.sh` in your own workflow.
 - **The CLI captures registered routes only.** `--project` and `--route` must exist in the registration
   file; there is no "compare this URL" mode. That is the same capture surface as the console, on
   purpose.

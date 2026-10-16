@@ -58,9 +58,14 @@ the recorded Chromium revision do not move with it, the suite says so.
 
 ### What is and is not pinned
 
-Measured, not asserted: **three separate runs** of `generate-baseline.sh` in this image — one of
-them from a checkout with CRLF line endings — produced byte-identical screenshots
-(`sha256:28399ef6…c530e1`, 70,020 bytes, 1280 × 800). What that does *not* promise:
+Measured, not asserted: **four separate runs** of `generate-baseline.sh` in this image — three on
+the development machine (one of them from a checkout with CRLF line endings) and one on a
+`ubuntu-latest` runner dispatched through the update workflow — produced byte-identical
+screenshots: `sha256:28399ef61ab1a1e8fe14d462cf6f42fc01d4657214b87009c67a04ac1cc530e1`, 70,020
+bytes, 1280 × 800. The runner's copy is
+[run 38845231360](https://github.com/Azmk1/uiproof/actions/runs/38845231360), whose artifact also
+records the image digest, Chromium revision 1248 and `fc-match system-ui` for the environment that
+produced it. What that does *not* promise:
 
 - **another architecture.** The image is multi-platform; the digest above is the index, so an
   arm64 runner gets arm64 Chromium. Rasters from two architectures are not guaranteed to match.
@@ -183,7 +188,8 @@ On GitHub Actions, `ubuntu-latest`, everything inside the pinned container:
 | A real UI change fails the gate with exit `1` (0.4404 % of the viewport, 4,510 px) | [PR #1, run 38844548795](https://github.com/Azmk1/uiproof/actions/runs/38844548795) |
 | The same pull request shipping a bundle that *matches* its own change still fails: the log warns the working-tree bundle differs and reports `exit 1` against `bl-c6198d4d…` | [PR #1, run 38844710523](https://github.com/Azmk1/uiproof/actions/runs/38844710523) |
 | With the UI reverted, the same pull request passes while still carrying its own bundle | [PR #1, run 38844749739](https://github.com/Azmk1/uiproof/actions/runs/38844877047) |
-| Reproducible generation: three runs, one image hash (`28399ef6…c530e1`, 70,020 bytes) | [bundle README](../examples/uiproof-baselines/README.md) |
+| Reproducible generation: four runs on two machines, one image hash (`28399ef6…c530e1`, 70,020 bytes) | [bundle README](../examples/uiproof-baselines/README.md) |
+| The update workflow runs end to end on a runner, uploads the bundle and touches nothing: the regenerated PNG is byte-identical to the committed one | [run 38845231360](https://github.com/Azmk1/uiproof/actions/runs/38845231360) |
 | Tampered image: `baseline_integrity_failed` naming both hashes | walkthrough scenario 6, run 38844220574 |
 
 Locally, in the same image: the pull request's own bundle was loaded and compared against the pull

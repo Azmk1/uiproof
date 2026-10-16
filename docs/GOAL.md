@@ -140,3 +140,40 @@ cloud database, extra services, publishing a package to npm, and a major archite
 - An imported bundle cannot write outside the store, cannot overwrite an approved version, and cannot
   change what is active by accident.
 - The web console and its baseline lifecycle keep working unchanged.
+
+## Phase 4.5 — trusted baselines and genuine CI enforcement (delivered)
+
+**Goal:** make the visual-regression workflow able to actually stop an unapproved visual change from
+merging. It could not: it imported a committed baseline and then approved the application under test
+immediately before checking it, so a broken change could pass its own gate.
+
+**In scope**
+
+1. A reproducible Linux/Chromium environment — one container image, pinned by tag and digest, with the
+   browser version, fonts, viewport, device scale factor, locale and the rest of the rendering input
+   written down, and an honest account of what is still not deterministic.
+2. A genuine approved baseline for the example application, generated in that environment, exported
+   and committed with its SHA-256 and metadata intact — plus a separate, reviewable process for
+   updating it that no pull request can reach and that commits nothing by itself.
+3. A real pull-request gate: the proposed code is built and run, the reference comes from the base
+   branch, nothing captures or approves during a check, `0` passes while `1` and `2` fail the job, and
+   screenshots, diffs and reports are uploaded either way. A pull request cannot authorise its own
+   visual change by editing the bundled baseline in the same pull request.
+4. The Phase 4 pass → regression → restore walkthrough kept as an integration test, clearly separated
+   from the gate, asserting each documented exit code rather than gating on it.
+5. Verification in that environment with real screenshots: approved `0`, modified `1`, restored `0`,
+   missing baseline `2`, tampered image `2`, and a modified bundle that cannot authorise its own pull
+   request.
+
+**Explicitly out of scope for Phase 4.5:** AI integration, authentication or multi-user features,
+hosted scanning, publishing a package to npm, and a major architecture rewrite.
+
+**Guardrails**
+
+- The gate never captures and never approves. Anything that approves is a separate, dispatched,
+  reviewed operation with no path from a pull request.
+- The reference a gate compares against comes from a commit the pull request cannot write to.
+- Every rendering-dependent variable is either pinned or named as unpinned; nothing is described as
+  reproducible without a measurement behind it.
+- The CLI's capture surface is unchanged: registered routes on loopback origins only.
+- Existing tests, the console and its baseline lifecycle keep working unchanged.

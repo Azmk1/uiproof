@@ -456,7 +456,8 @@ pnpm test:e2e    46 tests / 5 files passed
 
 | Check | Result |
 |-------|--------|
-| Reproducibility of the reference | Three separate `generate-baseline.sh` runs in the pinned image — one of them from a CRLF checkout — produced the **same** screenshot: `sha256:28399ef61ab1a1e8fe14d462cf6f42fc01d4657214b87009c67a04ac1cc530e1`, 70,020 bytes, 1280 × 800 |
+| Reproducibility of the reference | Four separate `generate-baseline.sh` runs in the pinned image — three locally (one from a CRLF checkout) and one on a `ubuntu-latest` runner — produced the **same** screenshot: `sha256:28399ef61ab1a1e8fe14d462cf6f42fc01d4657214b87009c67a04ac1cc530e1`, 70,020 bytes, 1280 × 800 |
+| The update workflow, on a runner | [run 38845231360](https://github.com/Azmk1/uiproof/actions/runs/38845231360) — **success**: captures, approves, exports and uploads; its artifact's PNG carries the same SHA-256 as the committed baseline, and the repository is untouched |
 | Gate, locally, in the image | Untouched application → `ok the run used the trusted reference bl-c6198d4d…`, `changed: 0% of the viewport`, `exit 0` |
 | Walkthrough, locally | 17/17 assertions matched, seven scenarios, exit `0` |
 | Gate on `main` | [run 38844220690](https://github.com/Azmk1/uiproof/actions/runs/38844220690) — **success**, `exit 0`, `changed: 0%`, trusted bundle from commit `df1312a`, `working tree copy: identical to the trusted bundle` |
