@@ -1,0 +1,122 @@
+name: Approved baseline update
+
+# The approved-baseline update procedure: deliberate, reviewed, and never part of a gate.
+#
+# A baseline is the thing a pull request is judged against. Whoever can regenerate it can make
+# any change pass — so approving is a separate, manual act, and this workflow is that act:
+#
+#   * it runs only when a maintainer dispatches it (`workflow_dispatch`), never on a push or a
+#     pull request, so no pull request can reach it;
+#   * it renders the baseline inside the same pinned image the gate runs in, so what it
+#     produces is comparable to what the gate sees;
+#   * it **does not commit anything**. It uploads the bundle as an artifact and writes the
+#     provenance — image digest, Chromium revision, commit, image SHA-256 — into the run
+#     summary. A human downloads it, reviews the diff, and commits it as its own pull request,
+#     where the bundle's owner reviews it (see CODEOWNERS).
+#
+# So the loop is: dispatch → review the artifact → commit the bundle → the gate now compares
+# against the new reference. Nothing in between is automatic.
+#
+# Prerequisites for a first run: the repository must have a committed bundle already, or the
+# export will refuse to overwrite a differing image. That is the point — see
+# docs/BASELINE-UPDATES.md for the bootstrap case (delete the bundle deliberately, or export to
+# a fresh directory).
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: Note recorded on the approved version
+        required: false
+        default: approved in the pinned rendering environment
+      viewport:
+        description: Viewport to approve
+        required: false
+        type: choice
+        default: desktop
+        options:
+          - desktop
+          - tablet
+          - mobile
+
+permissions:
+  contents: read
+
+env:
+  CI: "1"
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  UIPROOF_CONFIG: examples/ci/uiproof.config.json
+  UIPROOF_PROJECT: example-app
+  UIPROOF_ROUTE: home
+  WORK: ${{ runner.temp }}/uiproof/baseline-update
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  generate:
+    name: generate · pinned image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The environment that makes the baseline reproducible. The gate runs this exact image, so
+    # the image is part of the approval, not an implementation detail.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Capture, approve and export
+        # A dispatch input reaches the script through the environment, never interpolated into
+        # the shell command, so a note cannot turn into shell syntax.
+        env:
+          NOTE: ${{ inputs.note }}
+          VIEWPORT: ${{ inputs.viewport }}
+        run: |
+          bash scripts/ci/generate-baseline.sh \
+            --out "$WORK/bundle" \
+            --artifacts "$WORK/artifacts" \
+            --config "$UIPROOF_CONFIG" \
+            --project "$UIPROOF_PROJECT" \
+            --route "$UIPROOF_ROUTE" \
+            --viewport "$VIEWPORT" \
+            --note "$NOTE"
+
+      - name: Describe the approval for review
+        if: always()
+        run: |
+          if [ ! -f "$WORK/artifacts/provenance.txt" ]; then
+            exit 0
+          fi
+          {
+            echo "## Approved baseline candidate"
+            echo
+            echo '```'
+            cat "$WORK/artifacts/provenance.txt"
+            echo '```'
+            echo
+            echo "Download the **approved-baseline** artifact, review the image and the manifest,"
+            echo "then replace \`examples/uiproof-baselines\` with it in its own pull request."
+            echo "Nothing in this run has touched the repository."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the bundle for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: approved-baseline
+          path: |
+            ${{ env.WORK }}
+          if-no-files-found: warn
+          retention-days: 30

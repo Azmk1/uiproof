@@ -1,0 +1,122 @@
+name: Visual regression walkthrough
+
+# A demonstration and an integration test — **not** a quality gate.
+#
+# The gate is `visual-regression.yml`, and it fails a job when the application under test no
+# longer matches the approved baseline. This workflow is the opposite kind of thing on purpose:
+# it walks through the pass → deliberate regression → restore sequence and *asserts the exit
+# codes*, so a regression shows up here as exit 1 that was expected rather than as a failed
+# job. Nothing in a real pipeline should be built this way, which is exactly why it is a
+# separate file, a separate workflow name and a separate job.
+#
+# What it adds beyond the gate:
+#   * every documented exit code, asserted in the pinned rendering environment, with real
+#     Chromium screenshots of the example application: 0 unchanged, 1 changed, 0 restored,
+#     2 missing baseline, 2 tampered baseline image, 2 unreachable application;
+#   * proof that a pull request cannot authorise its own visual change: the walkthrough
+#     approves the changed page and rewrites the repository's own bundle with it, then runs the
+#     gate — which still answers 1, against the committed reference;
+#   * the same `scripts/ci/*` scripts the gate uses, so a walkthrough that passes is also a
+#     test of the gate's own plumbing.
+#
+# It runs on `main` and by hand. It edits the application's view and the bundle in the runner's
+# checkout to make its points, and restores both afterwards, so it is not something to run
+# against a pull request.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: visual-regression-walkthrough-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: "1"
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  UIPROOF_CONFIG: examples/ci/uiproof.config.json
+  UIPROOF_PROJECT: example-app
+  UIPROOF_ROUTE: home
+  UIPROOF_VIEWPORT: desktop
+  UIPROOF_BUNDLE_PATH: examples/uiproof-baselines
+  TRUSTED_DIR: ${{ runner.temp }}/uiproof/trusted-baseline
+  WORK: ${{ runner.temp }}/uiproof/walkthrough
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  walkthrough:
+    name: walkthrough · every exit code
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Same pinned environment as the gate, for the same reason: a walkthrough that ran in a
+    # different browser than the gate would be testing something else.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Read the committed approved baseline
+        # The same extraction the gate uses, aimed at this commit instead of a base branch.
+        run: |
+          mkdir -p "$WORK"
+          bash scripts/ci/trusted-baseline.sh \
+            --from-ref HEAD \
+            --into "$TRUSTED_DIR" \
+            --path "$UIPROOF_BUNDLE_PATH" \
+            --provenance "$WORK/trusted-baseline.txt"
+
+      - name: Walk through every exit code
+        # Exits 1 if any scenario answered something other than what the CLI documents.
+        run: |
+          bash scripts/ci/walkthrough.sh \
+            --bundle "$TRUSTED_DIR" \
+            --trusted-ref HEAD \
+            --artifacts "$WORK/artifacts" \
+            --stores "$WORK/stores" \
+            --bundle-path "$UIPROOF_BUNDLE_PATH" \
+            --config "$UIPROOF_CONFIG" \
+            --project "$UIPROOF_PROJECT" \
+            --route "$UIPROOF_ROUTE" \
+            --viewport "$UIPROOF_VIEWPORT"
+
+      - name: Upload the walkthrough evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uiproof-walkthrough
+          path: |
+            ${{ env.WORK }}
+            ${{ env.TRUSTED_DIR }}
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Check that the walkthrough left the checkout clean
+        # Scenario 3 rewrites the repository's bundle and scenarios 2/4 edit the view. If the
+        # restore ever stopped working, this is where it would show up rather than in somebody's
+        # next commit.
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the walkthrough modified the checkout and did not restore it"
+            git status --porcelain
+            git diff --stat
+            exit 1
+          fi
+          echo "the checkout is unchanged: the walkthrough restored everything it touched"

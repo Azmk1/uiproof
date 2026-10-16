@@ -1,0 +1,17 @@
+# Who reviews what, and why.
+#
+# A visual baseline is a decision, not an artifact: whoever can change it decides what counts
+# as a regression. So the two things that together define the gate — the approved bundle and
+# the workflow that enforces it — are reviewed by the project owner by default.
+#
+# GitHub only applies this if the base branch requires review from code owners; see
+# docs/BASELINE-UPDATES.md for the settings that have to be enabled by hand.
+
+# The canonical approved baselines. A change here changes what every future pull request is
+# compared against.
+/examples/uiproof-baselines/ @Azmk1
+
+# The gate itself: the workflow, the pinned rendering environment and scripts the gate runs.
+/.github/workflows/visual-regression.yml @Azmk1
+/.github/workflows/baseline-update.yml @Azmk1
+/scripts/ci/ @Azmk1

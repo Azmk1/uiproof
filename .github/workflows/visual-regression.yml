@@ -1,173 +1,135 @@
-name: Visual regression
+name: Visual regression gate
 
-# The example CI gate the Phase 4 brief asks for: a clean runner, no pre-existing UIProof
-# data, one command that answers "did the UI change?" with an exit code.
+# The real quality gate: a pull request builds and runs its proposed application code, and the
+# verdict comes from comparing it with an approved baseline that the pull request cannot write
+# to.
 #
-#   0  the comparison passed
-#   1  a visual regression was detected
-#   2  configuration, baseline, browser or infrastructure error
+# What makes this trustworthy, in one paragraph. The reference is extracted from the pull
+# request's **base branch** with `git archive`, so a pull request cannot authorise its own
+# visual change by editing `examples/uiproof-baselines` in the same pull request — the gate
+# reads the committed base, not the working tree. Nothing in this job captures or approves
+# anything: `run-gate.sh` starts the application, loads the approved baseline, compares, and
+# exits with the CLI's own code, which is the job's verdict. The whole job runs inside the
+# pinned rendering image, so the reference and the screenshot under test were rendered by the
+# same Chromium and the same fonts.
 #
-# It never needs a paid service, an API key or a hosted backend: the tool renders with the
-# Chromium Playwright already downloaded and reads and writes plain files in the workspace.
+#   0  the comparison passed                       → the job succeeds
+#   1  a visual regression was detected            → the job fails
+#   2  baseline, configuration, browser or
+#      infrastructure failure                     → the job fails
 #
-# Worth reading before copying this into your own repository: a baseline is a screenshot, so
-# it only matches pixel-for-pixel on the platform that rendered it. This job therefore loads
-# the committed bundle to prove the portable path works on a clean runner, then approves the
-# baseline *this runner* will be gated against. See
-# `examples/uiproof-baselines/README.md#one-honest-caveat-rendering-environments`.
+# A regression fails this job rather than being asserted as an expected exit code. The
+# walkthrough that does check for exit 1 deliberately is `visual-regression-demo.yml`, and it
+# is not a gate.
+#
+# The job needs read access to the repository and nothing else: no secret is configured, no
+# secret is referenced, and the repository token is never handed to the application under test
+# (scripts/ci/lib.sh starts it with `env -i`). Screenshots, diffs and reports are uploaded
+# whether the comparison passes or fails.
+#
+# Two things a repository using this workflow must configure by hand — GitHub does not let a
+# workflow protect itself (see docs/BASELINE-UPDATES.md):
+#   * a branch protection rule on the base branch requiring the check "gate · trusted baseline"
+#     to pass, so a red gate blocks the merge instead of merely being visible;
+#   * a review requirement (CODEOWNERS already routes examples/uiproof-baselines to its owner)
+#     so that changing the baseline is a reviewed operation, not a side effect.
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: visual-regression-${{ github.ref }}
+  group: visual-regression-gate-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
-  NEXT_TELEMETRY_DISABLED: "1"
   CI: "1"
-  APP_URL: http://127.0.0.1:4173
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
   UIPROOF_CONFIG: examples/ci/uiproof.config.json
-  UIPROOF_BUNDLE: examples/uiproof-baselines
+  UIPROOF_PROJECT: example-app
+  UIPROOF_ROUTE: home
+  UIPROOF_VIEWPORT: desktop
+  UIPROOF_BUNDLE_PATH: examples/uiproof-baselines
+  # The commit the reference comes from: the pull request's target branch, or the branch this
+  # push landed on. A pull request cannot write to either.
+  TRUSTED_REF: ${{ github.event.pull_request.base.ref || github.ref_name }}
+  TRUSTED_DIR: ${{ runner.temp }}/uiproof/trusted-baseline
+  WORK: ${{ runner.temp }}/uiproof/gate
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  visual-regression:
-    name: uiproof CLI · approved baseline · exit codes
+  gate:
+    name: gate · trusted baseline
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # The pinned rendering environment. Tag = the Playwright release, digest = the bytes:
+    # Chromium, fonts, fontconfig and libc all come from this image, which is what makes the
+    # committed baseline and this runner's screenshot comparable. Keep it in step with
+    # package.json and scripts/ci/lib.sh — src/lib/ci/pinned-environment.test.ts fails the
+    # unit suite if they drift apart.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf
+
     steps:
-      - name: Checkout
+      - name: Checkout the proposed code
         uses: actions/checkout@v7
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Chromium is the only thing the CLI needs beyond Node and this repository.
-      - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: Start the application under test
-        # HOST and PORT are set here rather than inherited: the registration file below
-        # names http://127.0.0.1:4173, and an ambient PORT must not move the application
-        # out from under it.
+      - name: Extract the approved baseline from the base branch
+        # `git archive` reads the committed tree of the base branch. Anything the pull request
+        # did to its own copy of the bundle is compared, reported and then ignored.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
         run: |
-          HOST=127.0.0.1 PORT=4173 nohup node examples/example-app/server.mjs > /tmp/example-app.log 2>&1 &
-          echo $! > /tmp/example-app.pid
+          echo "base branch: $TRUSTED_REF (pull request base $BASE_SHA)"
+          mkdir -p "$WORK"
+          git fetch --no-tags --depth=1 origin "$TRUSTED_REF"
+          echo "base branch tip: $(git rev-parse FETCH_HEAD)"
+          bash scripts/ci/trusted-baseline.sh \
+            --from-ref FETCH_HEAD \
+            --into "$TRUSTED_DIR" \
+            --path "$UIPROOF_BUNDLE_PATH" \
+            --provenance "$WORK/trusted-baseline.txt"
 
-      - name: Wait for the application to become healthy
+      - name: Gate the proposed code against it
+        # One step, because it is one decision: start the application under test, load the
+        # trusted baseline, compare, report, and exit with the comparison's own code. There is
+        # no capture and no approval anywhere in it.
         run: |
-          for attempt in $(seq 1 60); do
-            if curl -sf "$APP_URL/healthz" > /dev/null; then
-              echo "the example application answered /healthz after $attempt attempt(s)"
-              exit 0
-            fi
-            sleep 0.5
-          done
-          echo "::error::the example application never became healthy"
-          cat /tmp/example-app.log
-          exit 1
+          bash scripts/ci/run-gate.sh \
+            --bundle "$TRUSTED_DIR" \
+            --store "$WORK/store" \
+            --artifacts "$WORK/artifacts" \
+            --config "$UIPROOF_CONFIG" \
+            --project "$UIPROOF_PROJECT" \
+            --route "$UIPROOF_ROUTE" \
+            --viewport "$UIPROOF_VIEWPORT"
 
-      - name: Load the approved baseline from the repository
-        # The portable path: a bundle committed next to the code, loaded into a store that
-        # does not exist yet. Every image is checked against its recorded SHA-256, byte
-        # count and dimensions before it is written, and nothing is activated unless
-        # --activate says so.
-        run: |
-          pnpm uiproof baselines import --from "$UIPROOF_BUNDLE" --activate --config "$UIPROOF_CONFIG"
-          pnpm uiproof baselines status --config "$UIPROOF_CONFIG"
-
-      - name: Approve the baseline for this runner
-        # The committed image was rendered on another platform, so it is not the reference
-        # this runner compares against. Approving here is the recommended CI strategy: the
-        # gate's reference comes from the environment that runs the gate.
-        run: |
-          pnpm uiproof capture --project example-app --route home --approve \
-            --note "approved on the CI runner" --config "$UIPROOF_CONFIG"
-
-      - name: Gate — the unchanged application passes
-        run: |
-          set +e
-          pnpm uiproof check --project example-app --route home --config "$UIPROOF_CONFIG"
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            echo "::error::expected exit 0 for an unchanged page, got $status"
-            exit 1
-          fi
-          echo "exit 0 — no regression detected"
-
-      - name: Gate — a real UI change fails the job
-        # `home.changed.html` is a genuine edit to the application's own view: different
-        # figures, a recoloured header rule and two status changes. The gate must notice,
-        # and the run's JSON is kept next to the reports for the artifact upload below.
-        run: |
-          cp examples/example-app/views/home.changed.html examples/example-app/views/home.html
-          set +e
-          # `--silent` keeps pnpm's own banner out of stdout, so the file is one JSON
-          # document and nothing else — the same promise `--json` makes.
-          pnpm --silent uiproof check --project example-app --route home --json --config "$UIPROOF_CONFIG" \
-            > .uiproof/regression.json
-          status=$?
-          set -e
-          node -e '
-            const report = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-            console.log(`uiproof: status=${report.status} changed=${report.report.metrics.changePercentage}% (tolerance ${report.tolerance}%)`);
-          ' .uiproof/regression.json
-          if [ "$status" -ne 1 ]; then
-            echo "::error::expected exit 1 for a regression, got $status"
-            exit 1
-          fi
-          echo "exit 1 — the regression was detected"
-
-      - name: Gate — the reverted application passes again
-        run: |
-          git checkout -- examples/example-app/views/home.html
-          set +e
-          pnpm uiproof check --project example-app --route home --config "$UIPROOF_CONFIG"
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            echo "::error::expected exit 0 after reverting the change, got $status"
-            exit 1
-          fi
-
-      - name: Export the runner-approved baseline
-        # What you commit (or download) to make this runner's rendering the reference: a
-        # bundle produced here is pixel-exact for a gate that runs in the same environment.
-        run: pnpm uiproof baselines export --project example-app --route home --out .uiproof/runner-baseline --config "$UIPROOF_CONFIG"
-
-      - name: Upload the reports, screenshots and the approved bundle
+      - name: Upload the reports, screenshots and diffs
+        # Whether the comparison passed, failed or could not run: a regression has to be
+        # reviewable from the artifacts alone.
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: uiproof-visual-regression
-          # The store: one directory per run with report.json, current.png, baseline.png and
-          # diff.png. A regression is reviewable from these files alone.
+          name: uiproof-gate
           path: |
-            .uiproof/data
-            .uiproof/regression.json
-            .uiproof/runner-baseline
-            /tmp/example-app.log
+            ${{ env.WORK }}
+            ${{ env.TRUSTED_DIR }}
           if-no-files-found: warn
-          retention-days: 14
-
-      - name: Stop the application under test
-        if: always()
-        run: |
-          if [ -f /tmp/example-app.pid ]; then
-            kill "$(cat /tmp/example-app.pid)" 2>/dev/null || true
-          fi
+          retention-days: 30

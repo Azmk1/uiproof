@@ -1,0 +1,14 @@
+# The example application is not just source code here: UIProof renders it and compares the
+# screenshots, so the bytes of these files are part of what a baseline is. They are checked out
+# with LF on every platform for that reason.
+#
+# This is belt and braces, not a correctness fix: the HTML parser normalises CRLF to LF before
+# anything is laid out, so the rendered pixels of a CRLF checkout and an LF checkout are the
+# same (verified — see docs/BASELINE-UPDATES.md). Keeping one spelling removes the question,
+# and removes a class of "works on my machine" confusion in the pinned container, which
+# checks these files out fresh.
+examples/example-app/** text eol=lf
+
+# The approved baselines are compared by SHA-256 through .gitattributes-independent byte reads;
+# marking the images as binary stops git from ever treating a PNG as text.
+examples/uiproof-baselines/**/*.png binary
