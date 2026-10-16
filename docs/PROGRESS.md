@@ -103,6 +103,12 @@ pnpm build       ✓ compiled; ○ /, /demo, /demo/baseline, /demo/current, /dem
 pnpm test:e2e    22 tests / 3 files passed (Chromium, real production server)
 ```
 
+The same sequence ran on GitHub Actions for the Phase 2 commits
+([run 38828130420](https://github.com/Azmk1/uiproof/actions/runs/38828130420), `main` at
+`d619413`/`7622766`) and passed every step: install (`--frozen-lockfile`) → lint → typecheck →
+**84 unit tests** → production build → Chromium install → **22 browser tests**. Nothing in this
+milestone is claimed from a local-only run.
+
 `pnpm test:e2e` output (`vitest run --config vitest.e2e.config.mts`):
 
 ```
