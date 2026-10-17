@@ -20,6 +20,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Generated comparison artifacts never need linting.
     ".uiproof/**",
+    // The packaged CLI bundle `pnpm pack` builds from src — generated, not source.
+    "dist/**",
   ]),
 ]);
 

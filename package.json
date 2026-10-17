@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "description": "UIProof — automated frontend quality platform for visual regression detection.",
+  "bin": {
+    "uiproof": "./bin/uiproof.mjs"
+  },
+  "files": [
+    "bin/",
+    "dist/cli/"
+  ],
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 3000",
     "build": "next build",
@@ -16,7 +23,9 @@
     "setup:browser": "playwright install chromium",
     "example:app": "node examples/example-app/server.mjs",
     "uiproof": "node scripts/uiproof.mjs",
-    "build:cli": "node scripts/uiproof.mjs --build-only"
+    "build:cli": "node scripts/uiproof.mjs --build-only",
+    "prepack": "node scripts/uiproof.mjs --build-only --bundle-out dist/cli/uiproof.mjs",
+    "pack:local": "pnpm pack"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.5.0",

@@ -19,6 +19,7 @@
 
 # production
 /build
+/dist
 
 # generated comparison artifacts (screenshots + reports)
 /.uiproof/
