@@ -31,6 +31,10 @@ export interface ExampleApp {
   /** Just start it (captures a route whose definition is registered). */
   readonly applyUiChange: () => Promise<void>;
   readonly restoreUi: () => Promise<void>;
+  /** Swap the support view for its deliberately defective twin (quality.changed.html). */
+  readonly applyQualityDefects: () => Promise<void>;
+  /** Put the original support view back — the findings go with it. */
+  readonly restoreQuality: () => Promise<void>;
   readonly stop: () => Promise<void>;
 }
 
@@ -89,6 +93,11 @@ export async function startExampleApp(
   const originalView = await readFile(viewPath, "utf8");
   const changedView = await readFile(changedViewPath, "utf8");
 
+  const qualityViewPath = path.join(dir, "views", "quality.html");
+  const changedQualityViewPath = path.join(dir, "views", "quality.changed.html");
+  const originalQualityView = await readFile(qualityViewPath, "utf8");
+  const changedQualityView = await readFile(changedQualityViewPath, "utf8");
+
   const child = spawn(process.execPath, [path.join(dir, "server.mjs")], {
     cwd: dir,
     env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), EXAMPLE_APP_DIR: dir },
@@ -118,6 +127,15 @@ export async function startExampleApp(
     },
     restoreUi: async () => {
       await writeFile(viewPath, originalView, "utf8");
+    },
+    // The same mechanism on the support view: swapping the file is a real code change to
+    // what the application serves, so the next scan sees the defects and the restore
+    // removes exactly them.
+    applyQualityDefects: async () => {
+      await writeFile(qualityViewPath, changedQualityView, "utf8");
+    },
+    restoreQuality: async () => {
+      await writeFile(qualityViewPath, originalQualityView, "utf8");
     },
     stop: async () => {
       if (child.exitCode === null) {

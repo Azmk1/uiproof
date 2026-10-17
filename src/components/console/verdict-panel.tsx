@@ -5,7 +5,7 @@ import type { ComparisonReport } from "@/lib/compare/types";
 import { formatClockTime, formatDuration, formatRelativeTime } from "@/lib/format-time";
 import { cn, shortId } from "@/lib/utils";
 
-function MetricTile({
+export function MetricTile({
   label,
   value,
   hint,
@@ -33,7 +33,15 @@ function MetricTile({
   );
 }
 
-function MetaRow({ label, value, mono = true }: { readonly label: string; readonly value: string; readonly mono?: boolean }) {
+export function MetaRow({
+  label,
+  value,
+  mono = true,
+}: {
+  readonly label: string;
+  readonly value: string;
+  readonly mono?: boolean;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-4">
       <dt className="label-caps">{label}</dt>

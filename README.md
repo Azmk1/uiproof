@@ -46,12 +46,23 @@ AI-assisted repair proposals — none of that is wired up yet.
 - **Local persistence.** Screenshots and the JSON report are written to `.uiproof/data`, so a page
   refresh — or a server restart — keeps the last run, the approved baseline and the version history
   on screen.
-- **A CLI that a pipeline can gate on.** `pnpm uiproof capture|check|projects|baselines` runs the same
-  engine without the dashboard, prints one JSON document for automation, and separates "your UI
+- **A CLI that a pipeline can gate on.** `pnpm uiproof capture|check|audit|projects|baselines` runs the
+  same engine without the dashboard, prints one JSON document for automation, and separates "your UI
   changed" (`1`) from "the tool could not answer" (`2`).
 - **Portable, integrity-checked baselines.** `baselines export` writes a bundle you can commit;
   `baselines import --activate` loads it on a machine that has never seen UIProof, verifying every
   image against its recorded SHA-256, byte count and dimensions first.
+- **Accessibility and layout audits.** `pnpm uiproof audit` runs axe-core against the live DOM and
+  measures horizontal overflow at every viewport preset — desktop, tablet and mobile — judging both
+  against a written policy whose every threshold is a number you can disagree with. Findings carry
+  the rule, the element's selector and markup and the runner's remediation text; there is no score.
+  Results the runner cannot decide are reported as questions ("needs review"), never as failures, and
+  a passing scan only claims what it proves: this rule set found nothing on this page, in this
+  browser, at this moment.
+- **A quality panel in the console.** The dashboard runs the same audit for the selected source and
+  renders findings grouped by impact, layout results per viewport and a link to the screenshot each
+  measurement was taken from. Audits are stored like runs — a structured report plus one screenshot
+  per viewport — and the newest one for the source is restored on reload.
 - **A CI gate that can actually fail.** [.github/workflows/visual-regression.yml](.github/workflows/visual-regression.yml)
   compares a pull request's code against the approved bundle committed on its base branch, inside the
   pinned rendering image, and lets the comparison's own exit code fail the job. It never captures and
@@ -250,6 +261,14 @@ src/
     ├── projects/                    # registered local applications
     │   ├── registry.ts              # pure: parse and validate a registration file
     │   └── config.ts                # cached reader (env path or uiproof.config.json)
+    ├── quality/                     # accessibility + responsive measurements (no React)
+    │   ├── axe.ts                   # axe-core runner: inject, scan, defensive payload reading
+    │   ├── responsive.ts            # document/element overflow, deliberate-scroller detection
+    │   ├── policy.ts                # the deterministic pass/fail policy + its description
+    │   ├── fingerprint.ts           # stable finding identity: <rule>@<selector>
+    │   ├── presentation.ts          # pure: findings by impact, viewport blocks, panel model
+    │   ├── audit.ts                 # orchestrates one audit across the viewport presets
+    │   └── storage.ts               # audit reports + per-viewport screenshots on disk
     ├── http/                        # request trust, capture origin, local-only guard, baseline handlers
     ├── api-client.ts                # typed fetch client used by the console
     └── format-time.ts
@@ -261,10 +280,13 @@ e2e/                                   # browser suite (real Chromium, real serv
 ├── support/setup.ts                   # Vitest global setup / teardown
 ├── support/helpers.ts                 # assertions, API readers, mode/variant selection
 ├── support/example-app.ts             # starts the independent example app for the tests
-├── dashboard-smoke.test.ts            # console flow, measured verdict, persistence after reload
+├── dashboard-smoke.test.ts            # console flow, measured verdict, quality audit panel, persistence
 ├── accessibility.test.ts              # the Phase 1 audit regressions, pinned
 ├── baseline-lifecycle.test.ts         # approve → pass → regress → recover → restore → reload
-└── project-integration.test.ts        # register → capture → approve → real UI change → regress → restore → restart
+├── project-integration.test.ts        # register → capture → approve → real UI change → regress → restore → restart
+├── cli.test.ts                        # the CLI through the real process: exit codes, portable bundles
+├── quality.test.ts                    # the quality gate's seven demonstration points, through the CLI
+└── quality-api.test.ts                # the audit HTTP API: evidence links, findings, refusals
 examples/
 ├── example-app/                       # the independent application (no dependencies)
 │   ├── server.mjs                     #   reads views/ per request; /moved redirects away
@@ -497,6 +519,7 @@ writers, and the portable-bundle module.
 | ------- | ------------ |
 | `uiproof capture --project <id> --route <id>` | Captures the route and stores the screenshot |
 | `uiproof check --project <id> --route <id>` | Captures the route and diffs it against its approved baseline |
+| `uiproof audit --project <id> --route <id>` | Measures accessibility and layout and judges them by policy |
 | `uiproof projects` | Lists the projects and routes in the registration file |
 | `uiproof baselines [status]` | Shows the approved baselines, their versions and which one is active |
 | `uiproof baselines export (--project <id> \| --all) --out <dir>` | Writes a portable baseline bundle |
@@ -504,9 +527,10 @@ writers, and the portable-bundle module.
 | `uiproof --help` · `uiproof --version` | Help and version |
 
 Options: `--project`, `--route`, `--viewport desktop|tablet|mobile`, `--config <file>`,
-`--storage <dir>`, `--tolerance <pct>`, `--approve`, `--note <text>`, `--out`, `--from`, `--activate`,
-`--all`, `--json`, `--quiet`. `pnpm uiproof --help` is the full text; `pnpm build:cli` refreshes the
-bundle without running a command.
+`--storage <dir>`, `--tolerance <pct>`, `--quality`, `--fail-on <impact>`, `--new-only`, `--wcag-only`,
+`--max-document-overflow <px>`, `--max-element-overflow <px>`, `--approve`, `--note <text>`, `--out`,
+`--from`, `--activate`, `--all`, `--json`, `--quiet`. `pnpm uiproof --help` is the full text;
+`pnpm build:cli` refreshes the bundle without running a command.
 
 ```bash
 pnpm uiproof projects --config examples/ci/uiproof.config.json
@@ -519,7 +543,7 @@ pnpm uiproof check --project example-app --route home
 | Code | Meaning |
 | ---- | ------- |
 | `0` | the comparison passed — or a capture was stored, because a capture is never a pass |
-| `1` | a visual regression was detected |
+| `1` | a visual regression was detected — or the quality policy failed (`audit`) |
 | `2` | configuration, baseline, browser or infrastructure error: the tool could not answer |
 
 These are the interface. `2` is deliberately distinct from `1`: an unusable registration file, a
@@ -556,6 +580,35 @@ otherwise pnpm's own banner lands in the file.
 The `report` object *is* the persisted report: it is written to `<store>/reports/<run id>/report.json`
 before the CLI prints it, and the CLI suite asserts the two are equal rather than trusting the
 transcript.
+
+### The quality gate
+
+`uiproof audit` measures accessibility and responsive layout and judges both against a written
+policy — every threshold of it is a flag, never an opinion baked into the tool:
+
+| Flag | Meaning |
+| ---- | ------- |
+| `--fail-on minor\|moderate\|serious\|critical\|none` | Lowest impact that fails the policy (default `serious`; `none` reports everything and fails nothing) |
+| `--new-only` | Fail only on findings absent from the approved baseline's accessibility snapshot |
+| `--wcag-only` | Best-practice rules are reported but never counted against the policy |
+| `--max-document-overflow <px>` | Horizontal document scroll allowed (default `1`) |
+| `--max-element-overflow <px>` | Viewport escape allowed per element (default `1`) |
+
+`audit` measures every viewport preset (desktop, tablet, mobile) unless `--viewport` narrows it, and
+**never touches the approved baseline**: a failing policy exits `1` and leaves every approved
+screenshot exactly as it was. `capture --quality` and `check --quality` attach the same measurements
+to a run's report instead of gating on them.
+
+What an audit stores is the evidence behind each measurement, never a score:
+`<store>/audits/<audit id>/audit.json` plus one screenshot per audited viewport. Every finding
+carries the rule and its WCAG tags, the element's selector and markup and the runner's remediation
+text. Results the runner could not decide (an icon's contrast, say) are `needs-review` questions for a
+human — reported beside the verdict, never counted as failures. Findings are identified by
+`rule@selector`, so `--new-only` can name exactly which findings are newly introduced, which are
+known and which a change resolved.
+
+A passing audit is not a certification. It is what this rule set found, on this page, in this
+browser, at this moment — and the report says exactly that.
 
 ### Portable approved baselines
 
@@ -705,8 +758,9 @@ typecheck, unit tests, production build, Chromium install, browser suite.
 
 ## Testing
 
-`pnpm test` runs **188 unit tests** across 16 files, all covering the engine, the guards, the baseline
-store, the portable bundles, the CLI's parser and the pinned CI environment rather than the UI shell:
+`pnpm test` runs **223 unit tests** across 19 files, all covering the engine, the guards, the baseline
+store, the portable bundles, the quality measurements, the CLI's parser and the pinned CI environment
+rather than the UI shell:
 
 | File                            | Coverage                                                                                               |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -726,6 +780,9 @@ store, the portable bundles, the CLI's parser and the pinned CI environment rath
 | `cli/args.test.ts`              | The CLI's argument parser: commands and subcommands, value and boolean flags, `--tolerance` bounds, unknown options, `--help` winning over a missing option, and the documented exit codes in the help text |
 | `lib/ci/pinned-environment.test.ts` | The CI configuration itself: the Playwright pin is exact and matches the image tag, the image is pinned by tag *and* digest, every workflow runs in that same image, the recorded Chromium revision matches the installed Playwright, the gate workflow contains no `capture` and no `--approve` and reads a base-branch ref, and no workflow-level `env` reaches for a context GitHub does not allow there |
 | `cli/portable.test.ts`          | Portable bundles, treated as hostile input: canonical paths and traversal refusal, hand-edited manifests (wrong format, unknown scope, unknown viewport, non-canonical file, malformed hash, duplicate id, an active version that is not listed), import into a store that does not exist yet, idempotent re-import, activation only on request, a tampered image writing nothing, a version-id conflict keeping the approved bytes, export refusing to rewrite a bundled image |
+| `lib/quality/fingerprint.test.ts` | The stable identity behind "new findings": `rule@selector`, identical across rescans and insensitive to whitespace reflow, with distinct rules or elements never collapsing into one; violation sets deduplicate and sort, and the diff of two snapshots separates added, known and resolved regardless of order |
+| `lib/quality/policy.test.ts`    | The policy's arithmetic: each `--fail-on` band fails on exactly its impact and above (an unstated impact fails rather than being presumed harmless), `none` reports everything and fails nothing, best-practice rules leave the verdict when excluded, `--new-only` counts only findings absent from the reference and falls back to counting everything with a note when there is no trustworthy one, document overflow fails above its pixel limit, and the description names every threshold |
+| `lib/quality/presentation.test.ts` | The dashboard's view of an audit, kept pure: violations grouped by impact with empty bands omitted and unstated impact last, one finding seen at several viewports deduplicated with the viewports recorded, needs-review results kept apart from violations whatever their impact says, and both panel models carrying measurements, evidence and engine facts through unchanged |
 
 `diff.test.ts` is the important one: it builds synthetic PNGs in memory and asserts **exact** pixel
 counts (e.g. a 10 × 10 block changed on a 100 × 100 white canvas is exactly 100 pixels and 1 %).
@@ -737,16 +794,18 @@ would look, and asserts that every one of them is refused.
 
 ### Browser suite
 
-`pnpm test:e2e` runs **46 tests** across 5 files in real Chromium, against a real `next start` server
+`pnpm test:e2e` runs **58 tests** across 7 files in real Chromium, against a real `next start` server
 on a throwaway data directory ([e2e/](e2e)):
 
 | File | Coverage |
 | ---- | -------- |
-| `dashboard-smoke.test.ts` | Console renders with no console errors · the mode invariant (baseline mode is gated on an approved baseline actually existing) · a fixture run produces a measured verdict whose stored report agrees with the panel, with three real PNGs served · the reverted page state reports 0 px, not a false positive · the report survives a reload · the capture guard still closes |
+| `dashboard-smoke.test.ts` | Console renders with no console errors · the mode invariant (baseline mode is gated on an approved baseline actually existing) · a fixture run produces a measured verdict whose stored report agrees with the panel, with three real PNGs served · the reverted page state reports 0 px, not a false positive · the report survives a reload · the quality audit panel runs from the UI, groups findings by impact, reports layout per viewport and links each measurement to its screenshot (restored after a reload) · the capture guard still closes |
 | `accessibility.test.ts` | The Phase 1 audit regressions, pinned as measurements rather than claims: flex prose in reading order, every control ≥ 24 px, the slider hairline inside a 24 px hit area, zoom buttons at full size, WCAG AA contrast in both colour schemes, no overflow at 390 px, a focus ring on every keyboard stop, and the timeline reachable by keyboard with a ring on the focused bar |
 | `baseline-lifecycle.test.ts` | The seven-step lifecycle below, driven through the UI wherever the UI has an action for it |
 | `project-integration.test.ts` | The Phase 3 workflow against an independent application: start it, register it, capture a route, approve it, change the application's real UI, detect the regression, restore it, pass again, restart UIProof and find everything still there — plus the refusals |
 | `cli.test.ts` | The Phase 4 workflow through the real CLI process (`node scripts/uiproof.mjs …`, exit codes read from the process): help and version, usage errors, `projects`, a missing baseline, `capture --approve` reporting *captured* and never a pass, a passing `check` whose JSON equals the persisted report, a real UI change exiting `1` and recovering to `0`, unknown project/route/viewport, an off-origin redirect, an unreachable application, export/import on a fresh working directory, activation only on request, a tampered bundle, and `baselines status` naming the approved run |
+| `quality.test.ts` | The quality gate's seven demonstration points through the real CLI: a clean page passing at every viewport with the deliberate scroller recorded as evidence, a missing and an incorrect accessible name detected with structured evidence, a contrast failure reported with its measured ratio while an undecidable one stays a question, mobile-only overflow detected, restore naming what it resolved, screenshot baselines untouched by failing audits, and the documented exit code for each policy |
+| `quality-api.test.ts` | The audit HTTP API against a registered application: a clean audit with working evidence links (per-viewport PNGs and `audit.json`), a real code change producing findings by impact and layout defects only at the narrow viewport, the history listing newest first with summaries that match their reports, and the refusals — cross-site requests, unknown projects, bad policy and viewport input, path traversal on the evidence route |
 
 The lifecycle, in the order the suite checks it:
 
@@ -913,6 +972,11 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
   flags `dimensionsChanged` — that is a fallback, not full-page comparison.
 - **Whole-viewport tolerance.** The tolerance is a single percentage for the whole image; there are
   no per-region masks or ignore selectors yet.
+- **A quality audit is a scan, not a certification.** It reports what one rule set found on one page,
+  in one browser, at one moment, with the runner's version in the report. `needs-review` results are
+  exactly what the runner could not decide — they need a human and are never counted as failures.
+- **"New findings" need an approved reference.** Without an approved baseline's accessibility
+  snapshot the audit cannot say which findings are new; the report says so rather than guessing.
 - **No auth, no multi-tenancy, no queue.** Concurrent runs share one Chromium and are not queued.
   Baseline writes are therefore guarded by local-only rules plus the concurrency handling described
   above, not by identities or roles.
@@ -951,7 +1015,11 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
 
 ## Next milestone
 
-**Phase 5 — make the gate sharper, and cheaper to run everywhere.**
+Phase 5 delivered the accessibility and responsive quality gate — `uiproof audit`, the console's
+quality panel and the audit API — which was item 6 of this list, brought forward. What remains of the
+list is next:
+
+**Phase 6 — make the gate sharper, and cheaper to run everywhere.**
 
 1. **Ignore regions.** Selector- or rectangle-based masks, recorded in the report, so a volatile
    area can be excluded visibly instead of by lowering the global tolerance.
@@ -964,8 +1032,7 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
    does not need this repository at all, and keep the store format unchanged.
 5. **Multi-viewport approvals.** One approval covering desktop/tablet/mobile, with per-viewport pass
    or fail in a single report.
-6. **Then accessibility scanning** (axe-core plus the measurements this repository already makes), and
-   only afterwards GitHub integration and AI repair proposals.
+6. **Then GitHub integration and AI repair proposals** — after all of the above, not before.
 
 ---
 

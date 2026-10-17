@@ -10,6 +10,7 @@ import type {
   ReportResponse,
   ReportsResponse,
 } from "@/lib/compare/types";
+import type { AuditResponse, AuditsResponse, RunAuditResponse } from "@/lib/quality/types";
 
 /** Thin, typed wrapper around the UIProof HTTP API used by the console. */
 
@@ -126,6 +127,35 @@ export async function approveBaseline(input: ApproveBaselineInput): Promise<Appr
       note: input.note,
     }),
   });
+}
+
+export interface RunAuditInput {
+  /** A demo fixture target, or a route of a registered local application. */
+  readonly selection: SourceSelection;
+  readonly variantId?: string | null;
+}
+
+/**
+ * Measures accessibility and responsive layout at every viewport preset. The audit is
+ * persisted — report and screenshots — so the result's evidence links stay valid.
+ */
+export function createAudit(input: RunAuditInput): Promise<RunAuditResponse> {
+  return requestJson<RunAuditResponse>("/api/quality/audit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source: sourceRequest(input.selection), variantId: input.variantId ?? null }),
+  });
+}
+
+/** Audit history, newest first. */
+export function fetchAudits(limit?: number): Promise<AuditsResponse> {
+  const query = typeof limit === "number" ? `?limit=${encodeURIComponent(limit)}` : "";
+  return requestJson<AuditsResponse>(`/api/audits${query}`);
+}
+
+/** One stored audit: measurements and the evidence behind them. */
+export function fetchAudit(id: string): Promise<AuditResponse> {
+  return requestJson<AuditResponse>(`/api/audits/${encodeURIComponent(id)}`);
 }
 
 /** Makes an existing version active again — the explicit replace/restore action. */

@@ -1,3 +1,5 @@
+import type { QualitySection } from "@/lib/quality/types";
+
 /**
  * Domain types shared by the comparison engine (server) and the dashboard (client).
  * This module is intentionally free of runtime dependencies and Node APIs.
@@ -171,6 +173,19 @@ export interface BaselineReference {
   readonly imageUrl: string;
 }
 
+/**
+ * What an approved baseline recorded about the page's accessibility at approval time.
+ * Optional on versions — a Phase 1–4 approval has none — and only used to say which
+ * violations are new since the approval. It never influences the visual verdict.
+ */
+export interface AccessibilitySnapshot {
+  readonly runnerVersion: string;
+  readonly approvedAt: string;
+  /** `<rule>@<selector>` identities of the violations present at approval. */
+  readonly fingerprints: readonly string[];
+  readonly violationCount: number;
+}
+
 /** One approved baseline image. Versions are append-only; nothing is overwritten. */
 export interface BaselineVersion {
   readonly id: string;
@@ -192,6 +207,8 @@ export interface BaselineVersion {
   readonly bytes: number;
   readonly note: string | null;
   readonly imageUrl: string;
+  /** Accessibility findings at approval time, when that run measured them. */
+  readonly quality?: AccessibilitySnapshot;
 }
 
 export interface BaselineManifest {
@@ -243,6 +260,12 @@ export interface ComparisonReport {
   readonly metrics: ComparisonMetrics;
   readonly artifacts: ReportArtifacts;
   readonly engine: ComparisonEngineInfo;
+  /**
+   * Accessibility and responsive findings measured on the page under test. Absent on
+   * runs that did not ask for quality checks and on every report written before Phase 5,
+   * so historical reports keep loading unchanged and a visual verdict never depends on it.
+   */
+  readonly quality?: QualitySection;
 }
 
 export interface ReportSummary {

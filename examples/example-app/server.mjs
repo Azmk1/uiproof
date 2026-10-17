@@ -37,6 +37,7 @@ const VIEWS = {
   "/settings": "views/settings.html",
   "/pricing": "views/pricing.html",
   "/embedded": "views/embedded.html",
+  "/support": "views/quality.html",
 };
 
 const ASSETS = {

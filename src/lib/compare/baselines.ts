@@ -19,6 +19,7 @@ import { decodePng } from "./diff";
 import { ComparisonError } from "./errors";
 import { LockTimeoutError, withFileLock } from "./file-lock";
 import { sha256Hex, verifyImageIntegrity } from "./integrity";
+import { fingerprintViolations } from "@/lib/quality/fingerprint";
 import { readArtifact, readReport, scopeKeyOf } from "./storage";
 import { getTarget, getViewport } from "./targets";
 import type { BaselineManifest, BaselineReference, BaselineScope, BaselineVersion, ViewportPreset } from "./types";
@@ -373,6 +374,20 @@ export async function approveBaseline(input: ApproveBaselineInput): Promise<Appr
     bytes: png.byteLength,
     note,
     imageUrl: baselineImageUrl(scope, viewport.id, versionId),
+    // Phase 5: what the page's accessibility looked like at the moment of approval, so a
+    // later audit can say which violations are new. Recorded only when the approved run
+    // measured it; approving never runs a scan of its own.
+    quality: report.quality
+      ? (() => {
+          const fingerprints = fingerprintViolations(report.quality!.accessibility.findings);
+          return {
+            runnerVersion: report.quality!.accessibility.runner.version,
+            approvedAt,
+            fingerprints,
+            violationCount: fingerprints.length,
+          };
+        })()
+      : undefined,
   };
 
   const versionPath = resolveBaselineVersionPath(scope, viewport.id, versionId);

@@ -27,7 +27,11 @@ export type ComparisonErrorCode =
   // Phase 4: portable baselines.
   | "baseline_integrity_failed"
   | "baseline_version_conflict"
-  | "portable_bundle_invalid";
+  | "portable_bundle_invalid"
+  // Phase 5: accessibility and responsive quality checks.
+  | "quality_unavailable"
+  | "quality_failed"
+  | "quality_policy_invalid";
 
 const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   invalid_target: 400,
@@ -55,6 +59,9 @@ const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   baseline_integrity_failed: 400,
   baseline_version_conflict: 409,
   portable_bundle_invalid: 400,
+  quality_unavailable: 503,
+  quality_failed: 500,
+  quality_policy_invalid: 400,
 };
 
 export class ComparisonError extends Error {

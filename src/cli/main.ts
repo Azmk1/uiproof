@@ -9,6 +9,9 @@ import { formatBytes, formatChangePercentage } from "@/lib/compare/metrics";
 import { resolveReportDir } from "@/lib/compare/storage-paths";
 import { DEFAULT_VIEWPORT_ID, VIEWPORT_PRESETS, getViewport } from "@/lib/compare/targets";
 import type { BaselineScope, ComparisonReport } from "@/lib/compare/types";
+import { runQualityAudit } from "@/lib/quality/audit";
+import { describePolicy } from "@/lib/quality/policy";
+import type { AccessibilityFinding, QualityVerdict } from "@/lib/quality/types";
 import { loadProjectCatalog, resolveProjectConfigPath } from "@/lib/projects/config";
 import { findProject, findRoute } from "@/lib/projects/registry";
 import { CLI_NAME, CliUsageError, helpText, parseArgs, type ParsedArgs } from "./args";
@@ -80,7 +83,7 @@ async function requireSource(parsed: ParsedArgs, io: CliOutput): Promise<Source>
     );
   }
 
-  if (!parsed.project) throw new CliUsageError("--project <id> is required for capture and check.");
+  if (!parsed.project) throw new CliUsageError("--project <id> is required for capture, check and audit.");
   const project = findProject(catalog.projects, parsed.project);
   if (!project) {
     const known = catalog.projects.map((entry) => entry.id).join(", ") || "none";
@@ -89,7 +92,7 @@ async function requireSource(parsed: ParsedArgs, io: CliOutput): Promise<Source>
       `Project ${JSON.stringify(parsed.project)} is not registered in ${catalog.configPath} (registered: ${known}).`,
     );
   }
-  if (!parsed.route) throw new CliUsageError("--route <id> is required for capture and check.");
+  if (!parsed.route) throw new CliUsageError("--route <id> is required for capture, check and audit.");
   const route = findRoute(project, parsed.route);
   if (!route) {
     const known = project.routes.map((entry) => entry.id).join(", ");
@@ -140,6 +143,9 @@ async function runEngine(
     origin: "http://127.0.0.1",
     projects: catalog.projects,
     projectConfigError: catalog.error,
+    // `--quality` measures the page under test in the same capture; the visual verdict is
+    // computed exactly as before and is never influenced by it.
+    quality: parsed.quality ? true : undefined,
   });
 }
 
@@ -246,6 +252,125 @@ export async function runCheck(parsed: ParsedArgs, io: CliOutput, viewportId: st
     diff: report.artifacts.diff ?? null,
   });
   return regression ? EXIT_REGRESSION : EXIT_PASS;
+}
+
+/** One finding line, with the evidence a reviewer needs to act on it. */
+function auditFindingLines(finding: AccessibilityFinding): string[] {
+  const impact = finding.impact ?? "unstated";
+  const lines = [`    [${impact}] ${finding.rule} — ${finding.selector}`];
+  if (finding.help) lines.push(`        ${finding.help}`);
+  if (finding.html) lines.push(`        ${finding.html}`);
+  if (finding.summary) lines.push(`        ${finding.summary}`);
+  return lines;
+}
+
+function auditVerdictLine(verdict: QualityVerdict): string {
+  if (verdict.status === "pass") return "QUALITY PASS";
+  return "QUALITY FAIL";
+}
+
+/**
+ * `uiproof audit` — accessibility and responsive layout, judged by policy.
+ *
+ * Exit 1 means the policy failed: severe accessibility violations or layout escaping the
+ * viewport past the configured limits. It never approves, replaces or touches a visual
+ * baseline — a failing quality gate is a report, not a mutation.
+ */
+export async function runAudit(parsed: ParsedArgs, io: CliOutput): Promise<CliExitCode> {
+  const source = await requireSource(parsed, io);
+  const catalog = await loadProjectCatalog();
+
+  const viewports = parsed.viewport ? [requireViewport(parsed)] : VIEWPORT_PRESETS.map((preset) => preset.id);
+  const policy: Record<string, unknown> = {};
+  if (parsed.failOn !== null) policy.failOn = parsed.failOn;
+  if (parsed.newOnly) policy.failOnNewOnly = true;
+  if (parsed.wcagOnly) policy.includeBestPractice = false;
+  if (parsed.maxDocumentOverflow !== null) policy.maxDocumentOverflowPx = parsed.maxDocumentOverflow;
+  if (parsed.maxElementOverflow !== null) policy.maxElementOverflowPx = parsed.maxElementOverflow;
+
+  io.note(`Auditing ${source.label} at ${viewports.join(", ")}…`);
+
+  const { report, reportPath } = await runQualityAudit({
+    source: { kind: "project", projectId: source.projectId, routeId: source.routeId },
+    viewports,
+    policy: Object.keys(policy).length > 0 ? policy : undefined,
+    origin: "http://127.0.0.1",
+    projects: catalog.projects,
+    projectConfigError: catalog.error,
+  });
+
+  io.note(`Policy: ${describePolicy(report.policy)}`);
+  io.note(
+    `Runner: ${report.engine.axeVersion} (${report.engine.ruleSets.join(", ")}) · ${report.engine.browser} · ${report.engine.totalMs} ms`,
+  );
+
+  for (const viewport of report.viewports) {
+    const { accessibility, responsive } = viewport;
+    io.note("");
+    io.note(`${viewport.viewport.label} (${viewport.viewport.width}×${viewport.viewport.height}):`);
+    io.note(
+      `  accessibility — ${accessibility.totalFindings} violation(s) ` +
+        `(critical ${accessibility.counts.critical}, serious ${accessibility.counts.serious}, ` +
+        `moderate ${accessibility.counts.moderate}, minor ${accessibility.counts.minor}, ` +
+        `impact unstated ${accessibility.counts.unknown}), ` +
+        `${accessibility.needsReview} need(s) review`,
+    );
+    for (const finding of accessibility.findings) {
+      for (const line of auditFindingLines(finding)) io.note(line);
+    }
+    io.note(
+      `  responsive — document scrolls ${responsive.documentOverflowPx}px horizontally`,
+    );
+    for (const finding of responsive.findings) {
+      io.note(
+        `    ${finding.selector} escapes the viewport by ${finding.overflowPx}px (${finding.kind})`,
+      );
+      if (finding.html) io.note(`        ${finding.html}`);
+    }
+    for (const finding of responsive.contained) {
+      io.note(
+        `    ${finding.selector} overflows ${finding.overflowPx}px inside a scrollable region (${finding.scrollContainer ?? "scroller"}) — not a defect`,
+      );
+    }
+  }
+
+  io.note("");
+  io.note(auditVerdictLine(report.verdict));
+  for (const failure of report.verdict.failures) {
+    io.note(`  ${failure.code} — ${failure.message}`);
+  }
+  for (const note of report.verdict.notes) io.note(`  note: ${note}`);
+
+  if (report.references.length > 0) {
+    io.note(
+      `Reference: ${report.references.map((reference) => `${reference.versionId} (${reference.viewportId})`).join(", ")}`,
+    );
+    io.note(
+      `  new ${report.newFindingFingerprints.length}, known ${report.knownFindingFingerprints.length}, ` +
+        `resolved ${report.resolvedFindingFingerprints.length}`,
+    );
+  } else {
+    io.note("Reference: none — no approved baseline carries an accessibility snapshot for this route, so every finding counts.");
+  }
+
+  if (reportPath) io.note(`Evidence: ${reportPath} (audit.json + one screenshot per viewport)`);
+
+  const exitCode = report.verdict.status === "fail" ? EXIT_REGRESSION : EXIT_PASS;
+  io.result({
+    command: "audit",
+    status: report.verdict.status,
+    exitCode,
+    source: { projectId: source.projectId, routeId: source.routeId, viewports },
+    policy: report.policy,
+    verdict: report.verdict,
+    references: report.references,
+    newFindingFingerprints: report.newFindingFingerprints,
+    knownFindingFingerprints: report.knownFindingFingerprints,
+    resolvedFindingFingerprints: report.resolvedFindingFingerprints,
+    report,
+    reportPath,
+  });
+  return exitCode;
 }
 
 export async function runProjects(_parsed: ParsedArgs, io: CliOutput): Promise<CliExitCode> {
@@ -477,6 +602,8 @@ export async function main(argv: readonly string[], cwd: string = process.cwd())
         return await runCapture(parsed, io, viewportId);
       case "check":
         return await runCheck(parsed, io, viewportId);
+      case "audit":
+        return await runAudit(parsed, io);
       case "projects":
         return await runProjects(parsed, io);
       case "baselines":

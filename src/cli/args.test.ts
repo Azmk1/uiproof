@@ -13,6 +13,7 @@ describe("parseArgs", () => {
   it("reads every command and the baselines subcommands", () => {
     expect(parseArgs(["capture"]).command).toBe("capture");
     expect(parseArgs(["check"]).command).toBe("check");
+    expect(parseArgs(["audit"]).command).toBe("audit");
     expect(parseArgs(["projects"]).command).toBe("projects");
     expect(parseArgs(["help"]).command).toBe("help");
     expect(parseArgs(["version"]).command).toBe("version");
@@ -103,16 +104,59 @@ describe("parseArgs", () => {
     expect(parseArgs(["check", "--tolerance", "100"]).tolerance).toBe(100);
     expect(parseArgs(["check", "--tolerance", "0.05"]).tolerance).toBe(0.05);
   });
+
+  it("reads the quality options", () => {
+    const parsed = parseArgs([
+      "audit",
+      "--fail-on",
+      "critical",
+      "--new-only",
+      "--wcag-only",
+      "--max-document-overflow",
+      "8",
+      "--max-element-overflow",
+      "0",
+      "--quality",
+    ]);
+    expect(parsed).toMatchObject({
+      command: "audit",
+      failOn: "critical",
+      newOnly: true,
+      wcagOnly: true,
+      maxDocumentOverflow: 8,
+      maxElementOverflow: 0,
+      quality: true,
+    });
+  });
+
+  it("refuses quality options it cannot honour", () => {
+    expect(() => parseArgs(["audit", "--fail-on", "catastrophic"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["audit", "--fail-on", "none-none"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["audit", "--max-document-overflow", "-1"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["audit", "--max-element-overflow", "wide"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["audit", "--fail-on"])).toThrow(CliUsageError);
+  });
 });
 
 describe("helpText", () => {
   it("documents every command, option and exit code", () => {
     const text = helpText("9.9.9");
     expect(text).toContain("uiproof 9.9.9");
-    for (const command of ["capture", "check", "projects", "baselines export", "baselines import"]) {
+    for (const command of ["capture", "check", "audit", "projects", "baselines export", "baselines import"]) {
       expect(text).toContain(command);
     }
-    for (const option of ["--project", "--route", "--viewport", "--config", "--storage", "--json", "--activate"]) {
+    for (const option of [
+      "--project",
+      "--route",
+      "--viewport",
+      "--config",
+      "--storage",
+      "--json",
+      "--activate",
+      "--fail-on",
+      "--new-only",
+      "--wcag-only",
+    ]) {
       expect(text).toContain(option);
     }
     expect(text).toContain("Exit codes");

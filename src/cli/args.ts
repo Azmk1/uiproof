@@ -9,8 +9,13 @@
 
 export const CLI_NAME = "uiproof";
 
-export type CliCommand = "capture" | "check" | "projects" | "baselines" | "help" | "version";
+export type CliCommand = "capture" | "check" | "audit" | "projects" | "baselines" | "help" | "version";
 export type BaselinesSubcommand = "status" | "export" | "import";
+
+/** Impact bands a quality policy can fail on, in ascending order. */
+export type QualityFailOn = "minor" | "moderate" | "serious" | "critical" | "none";
+
+export const QUALITY_FAIL_ON: readonly QualityFailOn[] = ["minor", "moderate", "serious", "critical", "none"];
 
 /** Raised for anything the user could fix by reading `--help`. */
 export class CliUsageError extends Error {
@@ -41,6 +46,18 @@ export interface ParsedArgs {
   readonly json: boolean;
   readonly quiet: boolean;
   readonly help: boolean;
+  /** Also measure accessibility and responsive layout (capture and check). */
+  readonly quality: boolean;
+  /** Lowest accessibility impact that fails the quality gate (audit). */
+  readonly failOn: QualityFailOn | null;
+  /** Count only findings absent from the approved reference (audit). */
+  readonly newOnly: boolean;
+  /** Exclude best-practice rules from the policy; WCAG-tagged rules only (audit). */
+  readonly wcagOnly: boolean;
+  /** Maximum document-level horizontal overflow, in pixels (audit). */
+  readonly maxDocumentOverflow: number | null;
+  /** Maximum per-element viewport escape, in pixels (audit). */
+  readonly maxElementOverflow: number | null;
 }
 
 const BOOLEAN_FLAGS: Record<string, keyof ParsedArgs> = {
@@ -51,6 +68,9 @@ const BOOLEAN_FLAGS: Record<string, keyof ParsedArgs> = {
   "--quiet": "quiet",
   "--help": "help",
   "-h": "help",
+  "--quality": "quality",
+  "--new-only": "newOnly",
+  "--wcag-only": "wcagOnly",
 };
 
 const VALUE_FLAGS: Record<string, keyof ParsedArgs> = {
@@ -63,9 +83,12 @@ const VALUE_FLAGS: Record<string, keyof ParsedArgs> = {
   "--out": "out",
   "--from": "from",
   "--note": "note",
+  "--fail-on": "failOn",
+  "--max-document-overflow": "maxDocumentOverflow",
+  "--max-element-overflow": "maxElementOverflow",
 };
 
-const COMMANDS = new Set<CliCommand>(["capture", "check", "projects", "baselines", "help", "version"]);
+const COMMANDS = new Set<CliCommand>(["capture", "check", "audit", "projects", "baselines", "help", "version"]);
 const SUBCOMMANDS = new Set<BaselinesSubcommand>(["status", "export", "import"]);
 
 function parseTolerance(raw: string): number {
@@ -76,30 +99,29 @@ function parseTolerance(raw: string): number {
   return value;
 }
 
+function parsePixels(raw: string, token: string): number {
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new CliUsageError(`${token} must be a number of pixels, zero or more, got ${JSON.stringify(raw)}.`);
+  }
+  return value;
+}
+
+function parseFailOn(raw: string): QualityFailOn {
+  if (!(QUALITY_FAIL_ON as readonly string[]).includes(raw)) {
+    throw new CliUsageError(`--fail-on must be one of: ${QUALITY_FAIL_ON.join(", ")}, got ${JSON.stringify(raw)}.`);
+  }
+  return raw as QualityFailOn;
+}
+
 /**
  * Parses one command line. `--help` and `--version` win over everything else, so
  * `uiproof check --help` prints help rather than complaining about missing options.
  */
 export function parseArgs(argv: readonly string[]): ParsedArgs {
-  const values: {
-    command: CliCommand;
-    subcommand: BaselinesSubcommand | null;
-    project: string | null;
-    route: string | null;
-    viewport: string | null;
-    config: string | null;
-    storage: string | null;
-    tolerance: number | null;
-    out: string | null;
-    from: string | null;
-    approve: boolean;
-    note: string | null;
-    activate: boolean;
-    all: boolean;
-    json: boolean;
-    quiet: boolean;
-    help: boolean;
-  } = {
+  // A mutable mirror of ParsedArgs: parsing fills it in, then it is handed out as the
+  // readonly result.
+  const values: { -readonly [K in keyof ParsedArgs]: ParsedArgs[K] } = {
     command: "help",
     subcommand: null,
     project: null,
@@ -117,6 +139,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     json: false,
     quiet: false,
     help: false,
+    quality: false,
+    failOn: null,
+    newOnly: false,
+    wcagOnly: false,
+    maxDocumentOverflow: null,
+    maxElementOverflow: null,
   };
 
   const positionals: string[] = [];
@@ -144,6 +172,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       index += 1;
       if (valueKey === "tolerance") {
         values.tolerance = parseTolerance(raw);
+      } else if (valueKey === "failOn") {
+        values.failOn = parseFailOn(raw);
+      } else if (valueKey === "maxDocumentOverflow" || valueKey === "maxElementOverflow") {
+        values[valueKey] = parsePixels(raw, token);
       } else {
         if (raw.trim().length === 0) throw new CliUsageError(`${token} needs a non-empty value.`);
         (values as Record<string, unknown>)[valueKey] = raw;
@@ -191,6 +223,7 @@ Usage
 Commands
   capture              Capture a route of a registered project and store the screenshot
   check                Capture it and compare it with its approved baseline
+  audit                Measure accessibility and responsive layout, and judge them by policy
   projects             List the projects and routes in the registration file
   baselines [status]   Show approved baselines, their versions and their images
   baselines export     Write a portable baseline bundle
@@ -205,7 +238,18 @@ Source
 
 Run
   --tolerance <pct>    Share of the viewport that may change and still pass (default: 0.1)
+  --quality            Also measure accessibility and responsive layout (capture and check)
   --storage <dir>      Where reports and baselines are written  (default: .uiproof/data)
+
+Quality (audit; every threshold is a number you can disagree with)
+  --fail-on <impact>   Lowest impact that fails: minor | moderate | serious | critical | none
+                       (default: serious)
+  --new-only           Fail only on findings absent from the approved baseline's snapshot
+  --wcag-only          Count WCAG-tagged rules only; best-practice rules are reported but
+                       never fail the check
+  --max-document-overflow <px>   Horizontal document scroll allowed (default: 1)
+  --max-element-overflow <px>    Viewport escape allowed per element (default: 1)
+  audit measures every viewport preset (desktop, tablet, mobile) unless --viewport narrows it
 
 Baselines
   --approve            Approve this capture as a new baseline version (capture only)
@@ -223,13 +267,18 @@ Output
 
 Exit codes
   0  the comparison passed (or the capture was stored — a capture is never reported as a pass)
-  1  a visual regression was detected
+  1  a visual regression was detected, or the quality policy failed (audit)
   2  configuration, baseline, browser or infrastructure error
+
+  audit never touches the approved baseline: a failing quality policy exits 1 and leaves
+  every approved screenshot exactly as it was.
 
 Examples
   ${CLI_NAME} projects --config ./uiproof.config.json
   ${CLI_NAME} capture --project my-app --route home --approve
   ${CLI_NAME} check --project my-app --route home --json
+  ${CLI_NAME} audit --project my-app --route home --fail-on serious
+  ${CLI_NAME} audit --project my-app --route home --viewport mobile --json
   ${CLI_NAME} baselines export --project my-app --route home --out ./uiproof-baselines
   ${CLI_NAME} baselines import --from ./uiproof-baselines --activate
 `;

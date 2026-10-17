@@ -26,7 +26,7 @@ import type { ViewportPreset } from "./types";
  * scheme, reduced motion, animations disabled, carets hidden, fonts and images awaited.
  */
 
-export interface CaptureInput {
+export interface CaptureInput<TInspection = null> {
   readonly url: URL;
   readonly viewport: ViewportPreset;
   readonly timeoutMs?: number;
@@ -36,15 +36,24 @@ export interface CaptureInput {
   readonly label?: string;
   /** Preflight the target first, so an unreachable server fails fast and clearly. */
   readonly probe?: boolean;
+  /**
+   * Measure the captured page before its context closes — the quality checks use this to
+   * run axe and the responsive audit against the exact rendering the screenshot came from.
+   * The screenshot is taken first, so an inspector can never change the pixels; `durationMs`
+   * stays the capture's own time and an inspector times itself.
+   */
+  readonly inspect?: (page: Page) => Promise<TInspection>;
 }
 
-export interface CaptureResult {
+export interface CaptureResult<TInspection = null> {
   readonly png: Buffer;
   readonly durationMs: number;
   readonly browser: string;
   /** Requests refused because they left the approved origins. */
   readonly blockedRequests: number;
   readonly blockedOrigins: readonly string[];
+  /** What `inspect` measured, or `null` when nothing was asked. */
+  readonly inspection: TInspection | null;
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -119,7 +128,9 @@ async function waitForStableLayout(page: Page): Promise<void> {
     .catch(() => undefined);
 }
 
-export async function capturePage(input: CaptureInput): Promise<CaptureResult> {
+export async function capturePage<TInspection = null>(
+  input: CaptureInput<TInspection>,
+): Promise<CaptureResult<TInspection>> {
   const { url, viewport } = input;
   const label = input.label ?? url.pathname;
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -189,12 +200,15 @@ export async function capturePage(input: CaptureInput): Promise<CaptureResult> {
 
     await waitForStableLayout(page);
     const png = await page.screenshot({ type: "png", animations: "disabled", caret: "hide" });
+    const captureMs = Date.now() - startedAt;
+    const inspection = input.inspect ? await input.inspect(page) : null;
     return {
       png,
-      durationMs: Date.now() - startedAt,
+      durationMs: captureMs,
       browser: "chromium",
       blockedRequests,
       blockedOrigins: [...blockedOrigins].sort(),
+      inspection,
     };
   } catch (error) {
     if (error instanceof ComparisonError) throw error;

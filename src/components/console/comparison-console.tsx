@@ -6,6 +6,8 @@ import { ArtifactViewer } from "@/components/console/artifact-viewer";
 import { BaselinePanel } from "@/components/console/baseline-panel";
 import { ComparisonTimeline } from "@/components/console/comparison-timeline";
 import { ModePicker, VariantPicker } from "@/components/console/mode-picker";
+import { QualityAuditCard } from "@/components/console/quality-audit-card";
+import { QualityPanel } from "@/components/console/quality-panel";
 import { RunHistory } from "@/components/console/run-history";
 import { SourcePicker, ToleranceControl, ViewportPicker } from "@/components/console/run-controls";
 import { VerdictPanel } from "@/components/console/verdict-panel";
@@ -40,6 +42,7 @@ import type {
   ComparisonReport,
   ReportSummary,
 } from "@/lib/compare/types";
+import { qualityModelFromSection } from "@/lib/quality/presentation";
 
 function messageOf(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.length > 0 ? error.message : fallback;
@@ -530,6 +533,22 @@ export function ComparisonConsole() {
           ) : report ? (
             <>
               <VerdictPanel report={report} />
+              {report.quality ? (
+                <QualityPanel
+                  model={qualityModelFromSection(
+                    report.quality,
+                    report.viewport,
+                    report.artifacts.current
+                      ? {
+                          url: report.artifacts.current.url,
+                          bytes: report.artifacts.current.bytes,
+                          width: report.artifacts.current.width,
+                          height: report.artifacts.current.height,
+                        }
+                      : null,
+                  )}
+                />
+              ) : null}
               <ArtifactViewer report={report} />
             </>
           ) : (
@@ -544,6 +563,8 @@ export function ComparisonConsole() {
             viewportLabel={catalog?.viewports.find((item) => item.id === viewportId)?.label ?? viewportId}
             onSelect={handleSelectReport}
           />
+
+          <QualityAuditCard selection={selection} sourceLabel={selectedSource?.label ?? "the selected source"} />
         </div>
       </div>
     </>

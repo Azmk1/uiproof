@@ -159,6 +159,43 @@ describe("dashboard smoke test", () => {
     expect(await readHistoryCount(page)).toBe(countBefore);
   });
 
+  it("runs the quality audit and shows findings by impact with evidence links", async () => {
+    await page.getByRole("button", { name: /Run quality audit/i }).click();
+    // Scoped to the audit card: a run report can carry its own quality section too.
+    const panel = page.locator('[aria-label="Quality audit"] [aria-label="Accessibility and layout"]');
+    await expectVisible(panel, "the quality panel never appeared");
+
+    // Case-insensitive: the small-caps labels render uppercased.
+    const text = await expectText(panel, /Findings by impact/i);
+    expect(text).toMatch(/layout by viewport/i);
+    expect(text).toMatch(/baseline references/i);
+    // Every viewport preset was measured and reported on its own.
+    expect(text).toMatch(/desktop/i);
+    expect(text).toMatch(/tablet/i);
+    expect(text).toMatch(/mobile/i);
+
+    // Each measured viewport links to the screenshot its numbers came from.
+    const links = panel.locator('a[aria-label*="screenshot"]');
+    await eventually(async () => (await links.count()) === 3, {
+      message: "expected one evidence link per viewport",
+    });
+    const hrefs = await links.evaluateAll((nodes) =>
+      nodes.map((node) => (node as HTMLAnchorElement).getAttribute("href")),
+    );
+    for (const href of hrefs) {
+      const png = await fetchArtifactStatus(href!);
+      expect(png.status, href!).toBe(200);
+      expect(png.contentType).toBe("image/png");
+      expect(png.bytes).toBeGreaterThan(1000);
+    }
+
+    // The result persists: a reload restores the same audit instead of an empty card.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("heading", { name: /catch every drift/i }).waitFor();
+    await expectVisible(panel, "the stored audit was not restored after a reload");
+    await expectText(panel, /Findings by impact/i);
+  }, 120_000);
+
   it("keeps the project's capture guard closed", async () => {
     const response = await fetch(`${baseUrl()}/api/compare`, {
       method: "POST",

@@ -485,6 +485,65 @@ pnpm test:e2e    46 tests / 5 files passed
 
 ---
 
+## Phase 5 — the accessibility and responsive quality gate
+
+**Goal:** make UIProof detect the second and third thing the platform claims to detect —
+accessibility problems and design inconsistencies — as measurements a pipeline can gate on. Until
+this phase the tool could only see pixels: a page could pass a perfect visual comparison while
+shipping an unlabelled button, a 3:1 contrast note and a 720px banner that escapes a phone.
+
+### Acceptance criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | **A clean page passes at every viewport, and a deliberate scroller is evidence, not a defect** | **Verified** | Demonstration point 1, through the real CLI: `audit` on the registered `/support` route exits `0` with `pass` at desktop, tablet and mobile — 0 findings, 0 defects at every viewport. The page's table is wider than a phone and is recorded as contained overflow with the region that absorbs it (`table-scroll`), never as a defect; `audit.json` on disk equals the report the CLI printed, with one screenshot per viewport beside it |
+| 2 | **A missing accessible name is detected — and so is an incorrect one** | **Verified** | Point 2: the email field (`#support-email`) raises `label` (critical), the select left unnamed by a dangling `for=` raises `select-name` (critical), the icon-only button whose content is `aria-hidden` raises `button-name` (critical). Every finding carries the rule, its WCAG tags, the element's selector and markup and the runner's remediation text; fingerprints are `rule@selector` |
+| 3 | **A genuine contrast failure reports its measured ratio; an undecidable one is a question** | **Verified** | Point 3: the muted note raises `color-contrast` (serious) whose evidence carries the measured ratio and both colours (`#9a9a9a` on `#ffffff`, below 4.5:1) — computed from the rendered page, not guessed. The ✎ glyph's contrast cannot be computed, so it is a `needs-review` question: reported beside the violations and never counted against the policy. The `accessibility.serious` failure's evidence names the violation's fingerprint and not the question's |
+| 4 | **Horizontal overflow is detected at the mobile viewport and not at desktop** | **Verified** | Point 4: the fixed 720px maintenance banner gives `documentOverflowPx > 300` and an uncontained `element-overflow` finding at mobile (the failure's evidence names `maintenance-banner`), and `responsive.document-overflow` + `responsive.element-overflow` both fail the policy; the same page at desktop has zero defects and no responsive failure. The deliberate table scroller stays contained evidence throughout |
+| 5 | **Restoring the code removes the findings, and the report names what was resolved** | **Verified** | Point 5: against a reference approved from the defective page, `--new-only` reports the fingerprints as known and none new; after the view is restored the same policy reports every one as *resolved*, none new or known; a plain audit is clean at all three viewports again |
+| 6 | **The screenshot workflow is untouched, and a failing audit never touches a baseline** | **Verified** | Point 6: `capture --approve` and `check` work exactly as before beside the gate, and a failing audit exits `1` leaving the approved version untouched (1 version, still active, unchanged bytes) |
+| 7 | **CI receives the documented exit status for each quality-gate policy** | **Verified** | Point 7: `0` clean, `1` policy failure at each `--fail-on` band, `2` when the scan cannot run at all — and `2` stays distinct from `1` throughout, matching the README's exit-code table |
+| 8 | **API + dashboard: audit endpoints, findings by impact, responsive by viewport, evidence links** | **Verified** | `POST /api/quality/audit`, `GET /api/audits[?limit]`, `GET /api/audits/:id` and `GET /api/audits/:id/:file` (traversal-guarded like run artifacts); `e2e/quality-api.test.ts` (4 tests) proves the contract against a registered application including the refusals. The console's quality panel groups findings by impact, reports layout per viewport and links each measurement to the screenshot it came from, and restores the newest stored audit on reload (`e2e/dashboard-smoke.test.ts`) |
+| 9 | **Full verification, documentation, honest limitations** | **Verified** | lint · typecheck · **223** unit tests / 19 files · production build · **58** browser tests / 7 files, the whole chain green; README documents the gate, its flags and what a pass does not mean; the limitations and the bug this phase found are recorded below |
+
+### Milestone log
+
+| Milestone | Outcome |
+|-----------|---------|
+| M35 — measurements | `quality/axe.ts` (axe-core injected into the captured page, defensive reading of the runner's payload) and `quality/responsive.ts` (document overflow, elements escaping the viewport, deliberate-scroller detection); `quality/fingerprint.ts` gives every finding the identity `rule@selector` |
+| M36 — policy and orchestration | `quality/policy.ts` (every threshold a number, one human-readable line) and `quality/audit.ts` (capture + scan per viewport preset, approved-reference comparison, verdict with named evidence); `quality/storage.ts` stores `audit.json` plus one screenshot per viewport under `audits/`, deliberately apart from run reports |
+| M37 — CLI | `uiproof audit` plus `capture|check --quality`, the policy flags (`--fail-on`, `--new-only`, `--wcag-only`, `--max-document-overflow`, `--max-element-overflow`) and documented exit codes; `e2e/quality.test.ts` drives all seven demonstration points through the real process |
+| M38 — defect fixtures | `examples/example-app/views/quality.html` and its deliberately broken twin `quality.changed.html` — five real defects (missing label, incorrect label, aria-hidden button, a measured contrast failure, a 720px banner) — swapped and restored by the test harness as real edits to the application's own view |
+| M39 — API | The four audit endpoints, sharing the request guard and traversal rules of the run surface, plus typed client functions; `e2e/quality-api.test.ts` against the registered example application |
+| M40 — dashboard | `quality-panel.tsx` (findings by impact, layout by viewport, evidence links, honest empty states) and `quality-audit-card.tsx` wired into the console; `quality/presentation.ts` keeps the grouping and the panel model pure and unit tested |
+| M41 — verification and docs | The full chain green, README (gate, flags, evidence semantics, limitations) and this record |
+
+### Evidence
+
+| Check | Result |
+|-------|--------|
+| Clean page, all viewports | `QUALITY PASS`, exit `0`; 0 findings and 0 defects at desktop, tablet and mobile; the contained table scroller recorded with `table-scroll` at mobile |
+| Five real defects swapped into the app's own view | `label`, `select-name`, `button-name` (critical), `color-contrast` (serious — measured ratio and both colours in the evidence), 1 needs-review question; mobile `documentOverflowPx > 300` with `maintenance-banner` uncontained; desktop clean |
+| New / known / resolved | Against an approved reference: `--new-only` reports the defects as new on the changed page, known while they persist, and every one resolved after the restore |
+| Evidence on disk | `<store>/audits/<id>/audit.json` equals the report the CLI printed; `desktop.png`, `tablet.png`, `mobile.png` each > 1,000 bytes; the API serves the same files at `/api/audits/<id>/<viewport>.png` |
+| API contract | Clean audit → `200` with working evidence links; defects → `200` with findings by impact and layout defects only at mobile; history newest first with summaries equal to their reports; cross-site `403 untrusted_request`, unknown project `400 project_not_registered`, bad policy `400 quality_policy_invalid`, bad viewport `400 invalid_viewport`, traversal refused |
+| Dashboard | **Run quality audit** in the browser → panel with findings by impact, per-viewport layout blocks and three evidence links returning `200 image/png`; the same audit restored after a reload |
+| Full chain | lint · typecheck · 223 unit tests / 19 files · production build · 58 browser tests / 7 files — all green |
+
+**A real defect this phase found, fixed at the source:**
+
+1. **axe-core's injectable source does not survive bundling.** The library derives its browser
+   `source` at runtime from `Function.prototype.toString()` of its own build. Inside the production
+   server bundle that string is no longer the library: the injection appended silently, defined
+   nothing, and every scan failed with `axe-core is not present in the page` — while the CLI's esbuild
+   bundle worked, so nothing looked wrong until `e2e/quality-api.test.ts` drove the same engine
+   through `next start`. The scanner now injects the pristine `node_modules/axe-core/axe.min.js` read
+   from disk (the runtime value is only a fallback), and verifies after injecting that axe actually
+   loaded, so a broken injection is an honest `quality_unavailable` rather than a misleading page
+   error.
+
+---
+
 ## Decisions made during implementation
 
 - **Route groups** `(console)` / `(fixtures)` keep console chrome off the screens under test.
@@ -516,6 +575,11 @@ pnpm test:e2e    46 tests / 5 files passed
   baseline — by design for this phase.
 - Whole-viewport tolerance only: no ignore regions, no per-region masks, no full-page capture.
 - A run is tied to one viewport; there is no multi-viewport approval.
+- A quality audit is a scan, not a certification: it reports what one rule set found on one page, in
+  one browser, at one moment. `needs-review` results are exactly what the runner could not decide and
+  need a human; they are never counted as failures.
+- "New findings" need an approved reference: without an approved baseline's accessibility snapshot
+  an audit cannot say which findings are new, and says so instead of guessing.
 - No git SHA on a run yet, so a regression cannot yet name the commit that caused it.
 - Writes are local-only by rule (loopback bind + same origin), not by identity: there is no auth,
   no multi-tenancy and no queue. Concurrent runs share one Chromium.
@@ -555,13 +619,13 @@ are listed in `docs/BASELINE-UPDATES.md`.
 
 ## Next approved action
 
-Phase 4.5 is delivered and verified on `main`: the visual-regression workflow is a real gate — the
-reference comes from the pull request's base branch, nothing in it captures or approves anything, the
-comparison's exit code decides the job, and the whole job runs in one pinned container image so the
-committed baseline and the runner's screenshot are comparable. A pull request with a real UI change
-fails it; the same pull request shipping an approval of its own change still fails; reverting the UI
-passes. The recommended next milestone is
-**Phase 5 — make the gate sharper, and cheaper to run everywhere**: ignore regions recorded in the
+Phase 5 is delivered and verified on `main`: the quality gate measures accessibility and responsive
+layout on real pages, judges them against a policy whose every threshold is a flag, stores the
+evidence behind every measurement, and runs through the CLI (`uiproof audit`), the HTTP API and the
+console — with the seven demonstration points driven end to end against an independent application.
+A failing audit exits `1` and never touches an approved baseline. The recommended next milestone is
+the sharpening work this displaced:
+**Phase 6 — make the gate sharper, and cheaper to run everywhere**: ignore regions recorded in the
 report, a git SHA per run, `uiproof check --all` across a whole project, a published CLI package, and
 multi-viewport approvals. Two smaller items belong with it: an automated check that the manual branch
 protection settings in `docs/BASELINE-UPDATES.md` are actually configured, and a scheduled

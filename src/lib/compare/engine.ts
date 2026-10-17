@@ -9,6 +9,9 @@ import { ARTIFACT_FILENAMES, type ArtifactName } from "./storage-paths";
 import { artifactUrl, persistRun, type RunArtifacts } from "./storage";
 import { DEFAULT_VIEWPORT_ID, buildCaptureUrl, getViewport } from "./targets";
 import { buildProjectCaptureUrl } from "@/lib/projects/registry";
+import { runQualitySection, type MeasuredPage } from "@/lib/quality/audit";
+import { measureResponsive } from "@/lib/quality/responsive";
+import { scanAccessibility } from "@/lib/quality/axe";
 import type {
   ArtifactInfo,
   BaselineReference,
@@ -52,6 +55,12 @@ export interface RunComparisonOptions {
   /** Registered applications; pass the loaded configuration's projects. */
   readonly projects?: readonly RegisteredProject[];
   readonly projectConfigError?: string | null;
+  /**
+   * Phase 5: also measure the page under test for accessibility and responsive layout.
+   * Accepts `true` (default policy) or a quality policy object. The visual verdict is
+   * computed exactly as before and is never influenced by this.
+   */
+  readonly quality?: unknown;
 }
 
 interface ReferenceSide {
@@ -63,6 +72,26 @@ interface ReferenceSide {
   readonly captureMs: number;
   readonly browser: string;
   readonly blockedRequests: number;
+  /** Quality measurements of the page under test, when the run asked for them. */
+  readonly inspection: MeasuredPage | null;
+}
+
+/**
+ * Measures the page under test when the run asked for quality checks. Runs inside the
+ * capture, on the same page instance the screenshot came from, so a finding and a pixel
+ * describe one rendering.
+ */
+function qualityInspector(
+  quality: unknown,
+  viewport: ViewportPreset,
+): ((page: Parameters<NonNullable<Parameters<typeof capturePage>[0]["inspect"]>>[0]) => Promise<MeasuredPage>) | undefined {
+  if (quality === undefined || quality === null || quality === false) return undefined;
+  return async (page) => {
+    const startedAt = Date.now();
+    const accessibility = await scanAccessibility(page);
+    const responsive = await measureResponsive(page, viewport);
+    return { accessibility, responsive, scanMs: Date.now() - startedAt };
+  };
 }
 
 export function createReportId(): string {
@@ -74,6 +103,7 @@ async function referenceFromFixturePair(input: {
   readonly source: ResolvedRunSource;
   readonly viewport: ViewportPreset;
   readonly currentRoute: string;
+  readonly inspect?: (page: Parameters<NonNullable<Parameters<typeof capturePage>[0]["inspect"]>>[0]) => Promise<MeasuredPage>;
 }): Promise<ReferenceSide> {
   const fixturePath = input.source.fixtureBaselinePath;
   if (!fixturePath) {
@@ -94,7 +124,12 @@ async function referenceFromFixturePair(input: {
 
   const [baseline, current] = await Promise.all([
     capturePage({ url: baselineUrl, viewport: input.viewport, label: input.source.label }),
-    capturePage({ url: currentUrl, viewport: input.viewport, label: input.source.label }),
+    capturePage({
+      url: currentUrl,
+      viewport: input.viewport,
+      label: input.source.label,
+      inspect: input.inspect,
+    }),
   ]);
 
   return {
@@ -105,6 +140,7 @@ async function referenceFromFixturePair(input: {
     captureMs: Math.max(baseline.durationMs, current.durationMs),
     browser: current.browser,
     blockedRequests: baseline.blockedRequests + current.blockedRequests,
+    inspection: current.inspection,
   };
 }
 
@@ -133,6 +169,7 @@ async function referenceFromApprovedBaseline(input: {
   readonly source: ResolvedRunSource;
   readonly viewport: ViewportPreset;
   readonly currentRoute: string;
+  readonly inspect?: (page: Parameters<NonNullable<Parameters<typeof capturePage>[0]["inspect"]>>[0]) => Promise<MeasuredPage>;
 }): Promise<ReferenceSide> {
   const approved = await readActiveBaseline(baselineScopeOf(input.source), input.viewport.id);
   if (!approved) {
@@ -147,6 +184,7 @@ async function referenceFromApprovedBaseline(input: {
     viewport: input.viewport,
     label: input.source.label,
     allowedOrigins: input.source.allowedOrigins,
+    inspect: input.inspect,
   });
 
   return {
@@ -157,6 +195,7 @@ async function referenceFromApprovedBaseline(input: {
     captureMs: current.durationMs,
     browser: current.browser,
     blockedRequests: current.blockedRequests,
+    inspection: current.inspection,
   };
 }
 
@@ -165,12 +204,14 @@ async function captureOnly(input: {
   readonly source: ResolvedRunSource;
   readonly viewport: ViewportPreset;
   readonly currentRoute: string;
+  readonly inspect?: (page: Parameters<NonNullable<Parameters<typeof capturePage>[0]["inspect"]>>[0]) => Promise<MeasuredPage>;
 }): Promise<ReferenceSide> {
   const current = await capturePage({
     url: captureUrlFor(input.source, input.currentRoute),
     viewport: input.viewport,
     label: input.source.label,
     allowedOrigins: input.source.allowedOrigins,
+    inspect: input.inspect,
   });
 
   return {
@@ -181,6 +222,7 @@ async function captureOnly(input: {
     captureMs: current.durationMs,
     browser: current.browser,
     blockedRequests: current.blockedRequests,
+    inspection: current.inspection,
   };
 }
 
@@ -224,7 +266,12 @@ export async function runComparison(options: RunComparisonOptions): Promise<Comp
     throw new ComparisonError("invalid_options", (cause as Error).message, { cause });
   }
 
-  const shared = { source: source.source, viewport, currentRoute: source.currentRoute };
+  const shared = {
+    source: source.source,
+    viewport,
+    currentRoute: source.currentRoute,
+    inspect: qualityInspector(options.quality, viewport),
+  };
   const reference =
     source.mode === "baseline"
       ? await referenceFromApprovedBaseline(shared)
@@ -294,6 +341,19 @@ export async function runComparison(options: RunComparisonOptions): Promise<Comp
     };
   }
 
+  // Phase 5: the quality section is measured on the captured page and attached beside
+  // the visual metrics. Absent when the run did not ask for it, so every older report and
+  // every plain visual run is unchanged.
+  const quality = reference.inspection
+    ? await runQualitySection({
+        resolved: source,
+        viewport,
+        accessibility: reference.inspection.accessibility,
+        responsive: reference.inspection.responsive,
+        policy: options.quality === true ? undefined : options.quality,
+      })
+    : undefined;
+
   const report: ComparisonReport = {
     id: reportId,
     createdAt: new Date().toISOString(),
@@ -301,6 +361,7 @@ export async function runComparison(options: RunComparisonOptions): Promise<Comp
     mode: source.mode as ComparisonMode,
     variantId: source.variantId,
     baseline: reference.baselineReference,
+    quality,
     source: toReportSource(source.source, reference.blockedRequests),
     target: {
       // Demo targets keep their catalogue id so Phase 1/2 reports and readers stay
