@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Billing — Support</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand">Acme Billing</span>
+    </header>
+    <main class="page">
+      <h1>Contact support</h1>
+
+      <!-- Defect: a fixed width no phone viewport can hold. -->
+      <div class="banner" id="maintenance-banner" style="width: 720px">
+        <p>Scheduled maintenance on Sunday 02:00–04:00 UTC.</p>
+      </div>
+
+      <!-- Defect: #9a9a9a on #ffffff is 2.8:1, below the 4.5:1 this text needs. -->
+      <p class="note" style="color: #9a9a9a">Support replies arrive within one business day.</p>
+
+      <form>
+        <div class="form-row">
+          <!-- Defect: nothing names this control. -->
+          <input id="email" type="email" autocomplete="email" />
+        </div>
+        <button class="primary" type="submit">Send message</button>
+      </form>
+    </main>
+  </body>
+</html>

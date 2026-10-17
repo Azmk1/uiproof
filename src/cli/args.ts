@@ -14,6 +14,7 @@ export type CliCommand =
   | "check"
   | "audit"
   | "diagnose"
+  | "repair"
   | "projects"
   | "baselines"
   | "help"
@@ -74,6 +75,10 @@ export interface ParsedArgs {
   readonly source: string | null;
   /** Maximum issues to include in one diagnosis. */
   readonly maxIssues: number | null;
+  /** Repair attempts to allow, at most two. */
+  readonly maxAttempts: number | null;
+  /** Keep the temporary sandbox after a repair (debugging only). */
+  readonly keepSandbox: boolean;
 }
 
 const BOOLEAN_FLAGS: Record<string, keyof ParsedArgs> = {
@@ -87,6 +92,7 @@ const BOOLEAN_FLAGS: Record<string, keyof ParsedArgs> = {
   "--quality": "quality",
   "--new-only": "newOnly",
   "--wcag-only": "wcagOnly",
+  "--keep-sandbox": "keepSandbox",
 };
 
 const VALUE_FLAGS: Record<string, keyof ParsedArgs> = {
@@ -106,6 +112,7 @@ const VALUE_FLAGS: Record<string, keyof ParsedArgs> = {
   "--audit": "audit",
   "--source": "source",
   "--max-issues": "maxIssues",
+  "--max-attempts": "maxAttempts",
 };
 
 const COMMANDS = new Set<CliCommand>([
@@ -113,6 +120,7 @@ const COMMANDS = new Set<CliCommand>([
   "check",
   "audit",
   "diagnose",
+  "repair",
   "projects",
   "baselines",
   "help",
@@ -186,6 +194,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     audit: null,
     source: null,
     maxIssues: null,
+    maxAttempts: null,
+    keepSandbox: false,
   };
 
   const positionals: string[] = [];
@@ -219,6 +229,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         values[valueKey] = parsePixels(raw, token);
       } else if (valueKey === "maxIssues") {
         values.maxIssues = parseCount(raw, token, 1, 8);
+      } else if (valueKey === "maxAttempts") {
+        values.maxAttempts = parseCount(raw, token, 1, 2);
       } else {
         if (raw.trim().length === 0) throw new CliUsageError(`${token} needs a non-empty value.`);
         (values as Record<string, unknown>)[valueKey] = raw;
@@ -268,6 +280,7 @@ Commands
   check                Capture it and compare it with its approved baseline
   audit                Measure accessibility and responsive layout, and judge them by policy
   diagnose             Explain a stored report with an optional AI model
+  repair               Propose, isolate and measure a repair for a stored failure
   projects             List the projects and routes in the registration file
   baselines [status]   Show approved baselines, their versions and their images
   baselines export     Write a portable baseline bundle
@@ -304,6 +317,19 @@ Diagnosis (optional; needs UIPROOF_AI_API_KEY and a source directory)
                        UIPROOF_AI_BASE_URL (any OpenAI-compatible /chat/completions).
                        Without a key the command exits 2 and changes nothing.
 
+Repair (optional; needs a model, a source directory and a "repair" block)
+  --report <run id>    Stored comparison run to repair
+  --audit <audit id>   Stored audit to repair
+  --source <dir>       Application source directory (overrides the registration)
+  --max-attempts <n>   Repair attempts: 1 or 2 (default 2)
+  --out <file>         Write the verified patch here as a standalone .patch file
+  --keep-sandbox       Keep the temporary checkout for inspection (debugging only)
+                       The patch is applied only inside a temporary copy of the source,
+                       measured with the same audit engine, and verified against the
+                       configured build and test commands. The original tree is never
+                       written to. Exits 0 only when a patch is verified; 1 when no
+                       patch was verified; 2 for a configuration or infrastructure error.
+
 Baselines
   --approve            Approve this capture as a new baseline version (capture only)
   --note <text>        Note stored on the approved version
@@ -320,8 +346,9 @@ Output
 
 Exit codes
   0  the comparison passed (or the capture was stored — a capture is never reported as a pass),
-     or a diagnosis was produced and stored
-  1  a visual regression was detected, or the quality policy failed (audit)
+     a diagnosis was produced and stored, or a repair was verified
+  1  a visual regression was detected, the quality policy failed (audit), or no repair
+     patch could be verified (rejected, partially improved or unverifiable)
   2  configuration, baseline, browser or infrastructure error
 
   diagnose never returns 1: a diagnosis is an explanation, not a verdict, and it can never
@@ -340,5 +367,6 @@ Examples
   ${CLI_NAME} baselines import --from ./uiproof-baselines --activate
   ${CLI_NAME} diagnose --report run-e62644f5 --source ../my-app --json
   ${CLI_NAME} diagnose --audit audit-51117643
+  ${CLI_NAME} repair --audit audit-51117643 --max-attempts 2 --out ./repair.patch
 `;
 }

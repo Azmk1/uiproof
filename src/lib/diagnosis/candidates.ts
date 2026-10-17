@@ -93,6 +93,16 @@ export function tokensFromIssue(issue: DiagnosticIssue): SearchToken[] {
     }
   }
 
+  // Attribute *names* are evidence too, and often the most distinctive kind: an element
+  // that hides its only content with `aria-hidden` is telling us which template rendered
+  // it, even though the value (`"true"`) is meaningless as a search token.
+  for (const match of html.matchAll(/([a-z][\w-]*)=["']/gi)) {
+    const name = match[1].toLowerCase();
+    if (name === "role" || name.startsWith("aria-") || name.startsWith("data-")) {
+      pushToken(tokens, seen, { value: name, from: "attribute", kind: "identifier" });
+    }
+  }
+
   // The visible words of the element, when there are enough of them to be a real phrase.
   const inner = html.replace(/<[^>]*>/g, " ").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
   if (inner.length >= 12) {
@@ -301,18 +311,24 @@ export async function findCandidates(
     }
     const scored: Scored[] = [];
 
+    // Pass 1: find what each file matches, without scoring yet. The score depends on how
+    // common a token is across the workspace, and that can only be known once every file
+    // that matches has been seen.
+    const matches: Array<{
+      file: WorkspaceFile;
+      routeScore: number;
+      routeVia: string[];
+      markup: boolean;
+      hits: TokenHit[];
+    }> = [];
+
     for (const file of workspace.files) {
       const routeMatch = routeScore(file.relativePath, segments);
       if (routeMatch === null && tokens.length === 0) continue;
 
       const hits: TokenHit[] = [];
-      let score = routeMatch?.score ?? 0;
-      const via = routeMatch ? [...routeMatch.via] : [];
-
-      if ((issue.hints?.html ?? "").length > 0 && MARKUP_EXTENSIONS.has(pathExtension(file.relativePath))) {
-        score += MARKUP_WEIGHT;
-        via.push("can render markup, so it may contain the element itself");
-      }
+      const markup =
+        (issue.hints?.html ?? "").length > 0 && MARKUP_EXTENSIONS.has(pathExtension(file.relativePath));
 
       if (tokens.length > 0) {
         // Read the file only when there is something to look for in it.
@@ -326,18 +342,51 @@ export async function findCandidates(
           const tokenLines = findTokenLines(parsed.lines, token, parsed.comments);
           if (tokenLines.length === 0) continue;
           hits.push({ token, lines: tokenLines });
-          score += TOKEN_WEIGHTS[token.from];
-          via.push(
-            token.from === "text"
-              ? `contains the page text “${token.value.slice(0, 60)}” (line ${tokenLines[0]})`
-              : `contains ${token.from === "selector" ? "the selector" : "the element's"} token "${token.value}" (line ${tokenLines[0]})`,
-          );
         }
         if (hits.length === 0 && !routeMatch) continue;
       }
 
+      matches.push({
+        file,
+        routeScore: routeMatch?.score ?? 0,
+        routeVia: routeMatch ? [...routeMatch.via] : [],
+        markup,
+        hits,
+      });
+    }
+
+    // How many files a token appears in. A class name a dozen templates share is weak
+    // evidence; an `aria-hidden` that appears in one file is strong evidence. Weighting by
+    // this is what keeps a plausible-looking shared class from outranking the file that
+    // actually rendered the element the browser reported.
+    const documentFrequency = new Map<string, number>();
+    for (const entry of matches) {
+      for (const hit of entry.hits) {
+        const key = `${hit.token.kind}:${hit.token.value}`;
+        documentFrequency.set(key, (documentFrequency.get(key) ?? 0) + 1);
+      }
+    }
+
+    for (const entry of matches) {
+      const via = [...entry.routeVia];
+      let score = entry.routeScore;
+      if (entry.markup) {
+        score += MARKUP_WEIGHT;
+        via.push("can render markup, so it may contain the element itself");
+      }
+      for (const hit of entry.hits) {
+        const frequency = documentFrequency.get(`${hit.token.kind}:${hit.token.value}`) ?? 1;
+        const distinctiveness = 1 / (1 + Math.log2(frequency));
+        score += TOKEN_WEIGHTS[hit.token.from] * distinctiveness;
+        const shared = frequency > 1 ? `, also in ${frequency - 1} other file(s)` : ", unique to this file";
+        via.push(
+          hit.token.from === "text"
+            ? `contains the page text “${hit.token.value.slice(0, 60)}” (line ${hit.lines[0]}${shared})`
+            : `contains ${hit.token.from === "selector" ? "the selector" : "the element's"} token "${hit.token.value}" (line ${hit.lines[0]}${shared})`,
+        );
+      }
       if (score <= 0) continue;
-      scored.push({ file, score, via, hits });
+      scored.push({ file: entry.file, score, via, hits: entry.hits });
     }
 
     scored.sort((left, right) => (right.score - left.score) || (left.file.relativePath < right.file.relativePath ? -1 : 1));

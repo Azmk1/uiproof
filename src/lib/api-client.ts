@@ -16,6 +16,7 @@ import type {
   DiagnosisResponse,
 } from "@/lib/diagnosis/types";
 import type { AuditResponse, AuditsResponse, RunAuditResponse } from "@/lib/quality/types";
+import type { RepairResponse, RepairsResponse, StartRepairResponse } from "@/lib/repair/types";
 
 /** Thin, typed wrapper around the UIProof HTTP API used by the console. */
 
@@ -189,6 +190,38 @@ export function createDiagnosis(input: {
   readonly maxIssues?: number;
 }): Promise<DiagnoseResponse> {
   return requestJson<DiagnoseResponse>("/api/diagnoses", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Repair history for one scope, with whether a repair can run here at all.
+ *
+ * The panel asks this before offering the button, so a project without a sandbox, a build
+ * command or a configured model explains itself instead of failing when clicked.
+ */
+export function fetchRepairs(scopeKey?: string | null): Promise<RepairsResponse> {
+  const query = scopeKey ? `?scopeKey=${encodeURIComponent(scopeKey)}` : "";
+  return requestJson<RepairsResponse>(`/api/repairs${query}`);
+}
+
+/** One stored repair, read-only: every attempt, its measurements and its verdict. */
+export function fetchRepair(id: string): Promise<RepairResponse> {
+  return requestJson<RepairResponse>(`/api/repairs/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Runs a bounded repair for a stored failure. The source directory and sandbox come from
+ * the registration server-side; the browser cannot name either.
+ */
+export function createRepair(input: {
+  readonly reportId?: string;
+  readonly auditId?: string;
+  readonly maxAttempts?: 1 | 2;
+}): Promise<StartRepairResponse> {
+  return requestJson<StartRepairResponse>("/api/repairs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

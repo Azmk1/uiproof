@@ -1,0 +1,27 @@
+{
+  "projects": [
+    {
+      "id": "repair-app",
+      "name": "Repair fixture",
+      "origin": "http://127.0.0.1:4180",
+      "sourceDir": ".",
+      "routes": [
+        { "id": "support", "name": "Support", "path": "/" },
+        { "id": "manual", "name": "Manual", "path": "/manual" }
+      ],
+      "allowedOrigins": [],
+      "repair": {
+        "sandbox": {
+          "command": ["node", "server.mjs"],
+          "url": "http://127.0.0.1:4199",
+          "readyPath": "/healthz"
+        },
+        "build": ["node", "scripts/check-build.mjs"],
+        "test": ["node", "scripts/check-tests.mjs"],
+        "allow": ["views/**"],
+        "guardRoutes": ["manual"],
+        "entryFiles": ["views/index.html"]
+      }
+    }
+  ]
+}

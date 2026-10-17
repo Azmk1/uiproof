@@ -7,7 +7,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { createDiagnosis, fetchDiagnoses, fetchDiagnosis } from "@/lib/api-client";
-import type { Diagnosis, DiagnosisAvailability, DiagnosisSummary, DiagnosedIssue } from "@/lib/diagnosis/types";
+import type {
+  Diagnosis,
+  DiagnosisAvailability,
+  DiagnosisSummary,
+  DiagnosedIssue,
+  StaleSources,
+} from "@/lib/diagnosis/types";
 import { formatRelativeTime } from "@/lib/format-time";
 import { shortId } from "@/lib/utils";
 
@@ -152,7 +158,11 @@ export function DiagnosisPanel({
     readonly diagnoses: readonly DiagnosisSummary[];
     readonly availability: DiagnosisAvailability;
   } | null>(null);
-  const [loaded, setLoaded] = useState<{ readonly targetKey: string; readonly diagnosis: Diagnosis } | null>(null);
+  const [loaded, setLoaded] = useState<{
+    readonly targetKey: string;
+    readonly diagnosis: Diagnosis;
+    readonly staleSources: StaleSources | null;
+  } | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
@@ -182,7 +192,9 @@ export function DiagnosisPanel({
     let cancelled = false;
     fetchDiagnosis(summary.id)
       .then((response) => {
-        if (!cancelled) setLoaded({ targetKey, diagnosis: response.diagnosis });
+        if (!cancelled) {
+          setLoaded({ targetKey, diagnosis: response.diagnosis, staleSources: response.staleSources ?? null });
+        }
       })
       .catch(() => {
         /* the stored diagnosis stays hidden rather than showing something stale */
@@ -193,6 +205,7 @@ export function DiagnosisPanel({
   }, [targetKey, history, scopeKey, reportId, auditId]);
 
   const diagnosis = loaded?.targetKey === targetKey ? loaded.diagnosis : null;
+  const staleSources = loaded?.targetKey === targetKey ? loaded.staleSources : null;
   const availability = history?.availability ?? null;
 
   const handleDiagnose = useCallback(async () => {
@@ -202,7 +215,7 @@ export function DiagnosisPanel({
     setAnnouncement(`Asking the configured model to explain ${sourceLabel}.`);
     try {
       const response = await createDiagnosis(reportId ? { reportId } : { auditId: auditId ?? "" });
-      setLoaded({ targetKey, diagnosis: response.diagnosis });
+      setLoaded({ targetKey, diagnosis: response.diagnosis, staleSources: null });
       setAnnouncement("Diagnosis stored. It does not change any verdict.");
     } catch (caught) {
       setError(messageOf(caught, "The diagnosis could not be produced."));
@@ -292,6 +305,19 @@ export function DiagnosisPanel({
 
         {diagnosis ? (
           <div className="flex flex-col gap-5">
+            {staleSources && (staleSources.stale.length > 0 || staleSources.missing.length > 0 || staleSources.reason) ? (
+              <Alert variant="attention">
+                <TriangleAlert />
+                <div className="flex flex-col gap-1">
+                  <AlertTitle>The source moved since this diagnosis</AlertTitle>
+                  <AlertDescription>
+                    {staleSources.reason ??
+                      `${staleSources.stale.length} cited file(s) changed and ${staleSources.missing.length} can no longer be read. ` +
+                        "The line numbers below refer to the bytes UIProof saw at the time, not to the file as it is now."}
+                  </AlertDescription>
+                </div>
+              </Alert>
+            ) : null}
             <dl className="flex flex-col gap-2 rounded-lg border border-line bg-surface-muted/40 p-3 lg:max-w-[420px]">
               <MetaRow label="Diagnosis" value={shortId(diagnosis.id)} />
               <MetaRow label="Model" value={`${diagnosis.model.model} @ ${diagnosis.model.endpointHost}`} />

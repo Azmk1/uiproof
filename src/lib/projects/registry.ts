@@ -1,5 +1,6 @@
 import { isLoopbackHost } from "@/lib/http/trusted-request";
 import type { ComparisonMode, ProjectRoute, RegisteredProject } from "@/lib/compare/types";
+import type { RepairProjectConfig, RepairSandboxConfig } from "@/lib/repair/types";
 
 /**
  * Registered applications, read from a local configuration file.
@@ -23,6 +24,9 @@ export const MAX_PROJECTS = 50;
 export const MAX_ROUTES_PER_PROJECT = 50;
 export const MAX_ALLOWED_ORIGINS = 10;
 export const MAX_ROUTE_PATH_LENGTH = 200;
+export const MAX_REPAIR_COMMAND_ARGS = 20;
+export const MAX_REPAIR_ARG_LENGTH = 300;
+export const MAX_REPAIR_ENV = 10;
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const ENCODED_TRAVERSAL = /%2e|%2f|%5c/i;
@@ -96,6 +100,156 @@ function parseAllowedOrigin(value: unknown): string | null {
 function readString(source: Record<string, unknown>, key: string): string | null {
   const value = source[key];
   return typeof value === "string" ? value.trim() : null;
+}
+
+/**
+ * One shell-free command line for a repair sandbox. Tokens are passed to `execFile` as an
+ * argument vector, so a metacharacter is a literal — but it is far more likely to be a
+ * mistaken attempt at a shell pipeline, so it is refused with an explanation instead.
+ */
+function parseRepairCommand(input: unknown, where: string): string[] {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new RangeError(`${where} must be a non-empty array of command arguments.`);
+  }
+  if (input.length > MAX_REPAIR_COMMAND_ARGS) {
+    throw new RangeError(`${where} has ${input.length} arguments; the limit is ${MAX_REPAIR_COMMAND_ARGS}.`);
+  }
+  return input.map((token, index) => {
+    if (typeof token !== "string" || token.trim().length === 0) {
+      throw new RangeError(`${where}[${index}] must be a non-empty string.`);
+    }
+    if (token.length > MAX_REPAIR_ARG_LENGTH) {
+      throw new RangeError(`${where}[${index}] is longer than ${MAX_REPAIR_ARG_LENGTH} characters.`);
+    }
+    if (/[\u0000-\u001f\u007f]/.test(token)) {
+      throw new RangeError(`${where}[${index}] contains a control character.`);
+    }
+    if (/[;&|`$<>]/.test(token)) {
+      throw new RangeError(
+        `${where}[${index}] contains a shell metacharacter; repair commands run without a shell, so pass separate arguments instead.`,
+      );
+    }
+    if (token.split(/[\\/]/).includes("..")) {
+      throw new RangeError(`${where}[${index}] contains a parent-directory segment, which the sandbox does not allow.`);
+    }
+    return token;
+  });
+}
+
+const REPAIR_ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const SECRET_ENV_KEY = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)/i;
+
+function parseSandbox(input: unknown, projectId: string): RepairSandboxConfig {
+  const where = `project "${projectId}" repair.sandbox`;
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new RangeError(`${where} must be an object with a command and a url.`);
+  }
+  const source = input as Record<string, unknown>;
+  const command = parseRepairCommand(source.command, `${where}.command`);
+
+  const url = parseLoopbackOrigin(source.url);
+  if (!url) {
+    throw new RangeError(
+      `${where}.url must be a loopback http(s) origin such as http://127.0.0.1:4199 — no path, query, credentials or wildcard.`,
+    );
+  }
+
+  const rawReady = source.readyPath;
+  const readyPath = rawReady === undefined || rawReady === null ? "/healthz" : rawReady;
+  if (!isValidRoutePath(readyPath)) {
+    throw new RangeError(`${where}.readyPath must be a plain path such as /healthz.`);
+  }
+
+  const env: Record<string, string> = {};
+  const rawEnv = source.env;
+  if (rawEnv !== undefined && rawEnv !== null) {
+    if (rawEnv === null || typeof rawEnv !== "object" || Array.isArray(rawEnv)) {
+      throw new RangeError(`${where}.env must be an object of string values.`);
+    }
+    const entries = Object.entries(rawEnv as Record<string, unknown>);
+    if (entries.length > MAX_REPAIR_ENV) {
+      throw new RangeError(`${where}.env has ${entries.length} entries; the limit is ${MAX_REPAIR_ENV}.`);
+    }
+    for (const [key, value] of entries) {
+      if (!REPAIR_ENV_KEY.test(key)) throw new RangeError(`${where}.env has an invalid variable name: ${JSON.stringify(key)}.`);
+      if (SECRET_ENV_KEY.test(key)) {
+        throw new RangeError(
+          `${where}.env.${key} looks like a credential. A repair sandbox never receives secrets; remove it.`,
+        );
+      }
+      if (typeof value !== "string" || value.length > 500 || /[\u0000-\u001f\u007f]/.test(value)) {
+        throw new RangeError(`${where}.env.${key} must be a string of at most 500 characters without control characters.`);
+      }
+      env[key] = value;
+    }
+  }
+
+  return { command, url, readyPath, env };
+}
+
+/**
+ * The optional autonomous-repair block. It is validated as strictly as an origin: an
+ * invalid sandbox fails the registration instead of being ignored, because a project that
+ * asked for repair and silently got none is a worse outcome than an error.
+ */
+function parseRepair(input: unknown, projectId: string, routeIds: readonly string[]): RepairProjectConfig {
+  const where = `project "${projectId}" repair`;
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new RangeError(`${where} must be an object.`);
+  }
+  const source = input as Record<string, unknown>;
+  const sandbox = parseSandbox(source.sandbox, projectId);
+
+  const build = source.build === undefined || source.build === null ? null : parseRepairCommand(source.build, `${where}.build`);
+  const test = source.test === undefined || source.test === null ? null : parseRepairCommand(source.test, `${where}.test`);
+
+  let allow: string[] = ["**"];
+  if (source.allow !== undefined && source.allow !== null) {
+    if (!Array.isArray(source.allow) || source.allow.length === 0 || source.allow.length > 20) {
+      throw new RangeError(`${where}.allow must be a non-empty array of at most 20 glob patterns.`);
+    }
+    allow = source.allow.map((pattern, index) => {
+      if (typeof pattern !== "string" || pattern.trim().length === 0 || pattern.length > 200) {
+        throw new RangeError(`${where}.allow[${index}] must be a non-empty pattern of at most 200 characters.`);
+      }
+      if (pattern.startsWith("/") || pattern.includes("..")) {
+        throw new RangeError(`${where}.allow[${index}] must be relative to the source directory and may not contain "..".`);
+      }
+      return pattern.trim();
+    });
+  }
+
+  let entryFiles: string[] = [];
+  if (source.entryFiles !== undefined && source.entryFiles !== null) {
+    if (!Array.isArray(source.entryFiles) || source.entryFiles.length > 4) {
+      throw new RangeError(`${where}.entryFiles must be an array of at most 4 relative source paths.`);
+    }
+    entryFiles = source.entryFiles.map((entry, index) => {
+      if (typeof entry !== "string" || entry.trim().length === 0 || entry.length > 200) {
+        throw new RangeError(`${where}.entryFiles[${index}] must be a non-empty path of at most 200 characters.`);
+      }
+      const value = entry.trim();
+      if (value.startsWith("/") || value.includes("..") || value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) {
+        throw new RangeError(`${where}.entryFiles[${index}] must be a relative POSIX path inside the source directory.`);
+      }
+      return value;
+    });
+  }
+
+  let guardRoutes: string[] = [];
+  if (source.guardRoutes !== undefined && source.guardRoutes !== null) {
+    if (!Array.isArray(source.guardRoutes) || source.guardRoutes.length > 4) {
+      throw new RangeError(`${where}.guardRoutes must be an array of at most 4 registered route ids.`);
+    }
+    guardRoutes = source.guardRoutes.map((routeId, index) => {
+      if (!isValidRouteId(routeId) || !routeIds.includes(routeId)) {
+        throw new RangeError(`${where}.guardRoutes[${index}] is not a route id registered by this project.`);
+      }
+      return routeId;
+    });
+  }
+
+  return { sandbox, build, test, allow, guardRoutes, entryFiles };
 }
 
 function parseRoute(input: unknown, projectId: string, index: number): ProjectRoute {
@@ -189,6 +343,12 @@ function parseProject(input: unknown, index: number): RegisteredProject {
     sourceDir = rawSource.trim();
   }
 
+  // Phase 8: the optional isolated repair sandbox, build and test commands.
+  const repair =
+    source.repair === undefined || source.repair === null
+      ? null
+      : parseRepair(source.repair, id, routes.map((route) => route.id));
+
   return {
     id,
     name,
@@ -198,6 +358,7 @@ function parseProject(input: unknown, index: number): RegisteredProject {
     defaultMode: PROJECT_DEFAULT_MODE,
     allowedOrigins,
     sourceDir,
+    repair,
   };
 }
 

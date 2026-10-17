@@ -1,4 +1,5 @@
 import type { QualitySection } from "@/lib/quality/types";
+import type { RepairProjectConfig } from "@/lib/repair/types";
 
 /**
  * Domain types shared by the comparison engine (server) and the dashboard (client).
@@ -53,6 +54,12 @@ export interface RegisteredProject {
    * resolved against the registration file's own directory.
    */
   readonly sourceDir?: string | null;
+  /**
+   * Optional Phase 8 repair sandbox. Present only when the developer deliberately
+   * registered a command UIProof may start in an isolated copy of the source, plus the
+   * build and test commands that must pass before a patch can be called verified.
+   */
+  readonly repair?: RepairProjectConfig | null;
 }
 
 /** Result of reading the local project configuration file. */

@@ -63,6 +63,12 @@ export interface RunQualityAuditOptions {
   readonly projectConfigError?: string | null;
   /** Persist the audit (report JSON + screenshots). False keeps nothing on disk. */
   readonly persist?: boolean;
+  /**
+   * Return the captured PNGs alongside the report. Used by the repair engine, which keeps
+   * its own before/after evidence directory instead of writing sandbox audits into the
+   * store. Adds one buffer per viewport to memory, bounded by the viewport size.
+   */
+  readonly returnScreenshots?: boolean;
 }
 
 export interface MeasuredPage {
@@ -226,6 +232,8 @@ export interface RunQualityAuditResult {
   readonly reportPath: string | null;
   /** Absolute paths of the persisted screenshots, keyed by viewport id. */
   readonly screenshotPaths: Readonly<Record<string, string>>;
+  /** Captured PNGs, only when `returnScreenshots` was requested. */
+  readonly screenshotBuffers?: Readonly<Record<string, Buffer>>;
 }
 
 /**
@@ -331,7 +339,12 @@ export async function runQualityAudit(options: RunQualityAuditOptions): Promise<
   };
 
   if (options.persist === false) {
-    return { report, reportPath: null, screenshotPaths: {} };
+    return {
+      report,
+      reportPath: null,
+      screenshotPaths: {},
+      ...(options.returnScreenshots ? { screenshotBuffers: screenshots } : {}),
+    };
   }
 
   await persistAudit(report, screenshots);
@@ -339,6 +352,7 @@ export async function runQualityAudit(options: RunQualityAuditOptions): Promise<
     report,
     reportPath: `audits/${report.id}/audit.json`,
     screenshotPaths: Object.fromEntries(viewports.map((viewport) => [viewport.id, `audits/${report.id}/${viewport.id}.png`])),
+    ...(options.returnScreenshots ? { screenshotBuffers: screenshots } : {}),
   };
 }
 

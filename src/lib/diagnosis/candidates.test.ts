@@ -294,6 +294,49 @@ describe("findCandidates", () => {
     expect(candidates[0].excerpt).toContain('5:   <input id="support-email" type="email" />');
   });
 
+  it("ranks the template that rendered an icon-only button above one that merely shares its class", async () => {
+    // The Phase 7 pilot's known miss: the button-name finding on an icon-only button was
+    // cited to a different view that also has a `.ghost` button. A distinctive attribute
+    // (`aria-hidden`) and its rarity across the workspace is what tells the two apart.
+    const home = [
+      "<header>",
+      '  <button class="ghost" type="button">Export CSV</button>',
+      "</header>",
+      "",
+    ].join("\n");
+    const support = [
+      "<form>",
+      '  <button class="ghost" type="button">Send message</button>',
+      '  <button class="ghost" type="button">',
+      '    <span aria-hidden="true">✎</span>',
+      "  </button>",
+      "</form>",
+      "",
+    ].join("\n");
+    const root = await makeTree({ "views/home.html": home, "views/quality.html": support });
+    ROOTS.push(root);
+    const workspace = await openWorkspace(root);
+
+    const issue: DiagnosticIssue = {
+      key: "a11y:button-name@button.ghost:nth-child(2)",
+      kind: "accessibility",
+      title: "button-name on the icon-only button",
+      measured: [],
+      evidence: [],
+      hints: {
+        selector: "form > button.ghost:nth-child(2)",
+        html: '<button class="ghost" type="button"><span aria-hidden="true">✎</span></button>',
+      },
+    };
+    const candidates = (await findCandidates(workspace, [issue], "/support")).byIssue.get(issue.key) ?? [];
+
+    expect(candidates.map((candidate) => candidate.path)).toEqual(["views/quality.html", "views/home.html"]);
+    expect(candidates[0].via.join(" ")).toContain("aria-hidden");
+    expect(candidates[0].via.join(" ")).toContain("unique to this file");
+    expect(candidates[0].matchedLines).toEqual([2, 3, 4]);
+    expect(candidates[0].matchedLines).not.toContain(1);
+  });
+
   it("marks an excerpt as truncated when the file is longer than what was sent", async () => {
     const { workspace } = await project();
     const { byIssue } = await findCandidates(workspace, [A11Y_ISSUE], "/settings", { excerptLines: 6 });

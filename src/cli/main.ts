@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import packageJson from "../../package.json";
@@ -13,6 +14,9 @@ import { runQualityAudit } from "@/lib/quality/audit";
 import { describePolicy } from "@/lib/quality/policy";
 import type { QualityVerdict } from "@/lib/quality/types";
 import { runDiagnosis } from "@/lib/diagnosis/diagnose";
+import { runRepair } from "@/lib/repair/engine";
+import { repairPatchName } from "@/lib/repair/storage";
+import type { RepairMeasurement, RepairVerdict } from "@/lib/repair/types";
 import { loadProjectCatalog, resolveProjectConfigPath, resolveRegisteredSourceDir } from "@/lib/projects/config";
 import { findProject, findRoute } from "@/lib/projects/registry";
 import { CLI_NAME, CliUsageError, helpText, parseArgs, type ParsedArgs } from "./args";
@@ -470,6 +474,167 @@ export async function runDiagnose(parsed: ParsedArgs, io: CliOutput, cwd: string
   return EXIT_PASS;
 }
 
+function verdictLine(verdict: RepairVerdict): string {
+  switch (verdict) {
+    case "verified":
+      return "REPAIR VERIFIED";
+    case "partially-improved":
+      return "REPAIR PARTIALLY IMPROVED";
+    case "rejected":
+      return "REPAIR REJECTED";
+    default:
+      return "REPAIR NOT VERIFIABLE";
+  }
+}
+
+function measurementLine(measurement: RepairMeasurement): string {
+  return measurement.pages
+    .map((page) => {
+      const a11y = `${page.accessibility.violations} violation(s), ${page.accessibility.serious + page.accessibility.critical} serious/critical`;
+      const layout = `${page.layout.documentOverflowPx}px overflow`;
+      const visual = page.visual.status === "no-baseline" ? "no baseline" : `${page.visual.changePercentage}% vs baseline`;
+      return `${page.routeId}@${page.viewportId}: ${a11y}, ${layout}, ${visual}`;
+    })
+    .join(" · ");
+}
+
+/**
+ * `uiproof repair` — propose a patch, apply it only inside an isolated copy, measure both
+ * sides with the real audit engine, and report a deterministic verdict.
+ *
+ * Exit `0` only when a patch is verified. It never writes to the source tree, never
+ * approves a baseline and never merges anything: `--out` writes a standalone patch file a
+ * developer can review and apply by hand.
+ */
+export async function runRepairCommand(parsed: ParsedArgs, io: CliOutput, cwd: string): Promise<CliExitCode> {
+  if (!parsed.report && !parsed.audit) {
+    throw new CliUsageError("repair needs --report <run id> (a comparison) or --audit <audit id>.");
+  }
+  if (parsed.report && parsed.audit) {
+    throw new CliUsageError("repair works on one report at a time: pass --report or --audit, not both.");
+  }
+
+  const catalog = await loadProjectCatalog();
+  io.note(
+    `Repairing ${parsed.audit ? `audit ${parsed.audit}` : `run ${parsed.report}`}${parsed.maxAttempts ? ` (up to ${parsed.maxAttempts} attempt(s))` : ""}…`,
+  );
+
+  const { repair, path: storedPath, sandboxPath } = await runRepair({
+    reportId: parsed.report ?? undefined,
+    auditId: parsed.audit ?? undefined,
+    sourceDir: parsed.source ?? undefined,
+    maxAttempts: parsed.maxAttempts ?? undefined,
+    keepSandbox: parsed.keepSandbox,
+    cwd,
+    lookupProject: (projectId) => {
+      const project = projectId ? findProject(catalog.projects, projectId) : undefined;
+      return {
+        project: project ?? null,
+        sourceDir: project ? resolveRegisteredSourceDir(project, catalog.configPath) : null,
+        from: catalog.configPath,
+      };
+    },
+  });
+
+  io.note(
+    `Source: ${repair.sourceRoot} — revision ${repair.revision.commitSha ?? "(no Git repository)"}` +
+      `${repair.revision.dirty === true ? ` with ${repair.revision.dirtyFiles.length} uncommitted path(s)` : ""}, ` +
+      `${repair.revision.digestFiles} file(s) pinned`,
+  );
+  io.note(`Model: ${repair.model?.model ?? "none"} @ ${repair.model?.endpointHost ?? "-"}`);
+  io.note(`Sandbox: ${repair.limits.maxAttempts} attempt(s) maximum, ${repair.before.pages.length} page(s) measured`);
+
+  for (const [index, attempt] of repair.attempts.entries()) {
+    io.note("");
+    io.note(`Attempt ${attempt.attempt} of ${repair.limits.maxAttempts}: ${verdictLine(attempt.verdict)}`);
+    if (attempt.proposal) {
+      io.note(`  target: ${attempt.proposal.issueKey} — ${attempt.proposal.title}`);
+      io.note(`  change: ${attempt.proposal.summary}`);
+      io.note(
+        `  files: ${attempt.proposal.files.map((file) => `${file.path} (+${file.additions}/-${file.deletions})`).join(", ")}`,
+      );
+      io.note(`  expected: ${attempt.proposal.expectedImprovement}`);
+      if (attempt.proposal.uncertainty) io.note(`  uncertainty: ${attempt.proposal.uncertainty}`);
+      io.note("  diff:");
+      for (const line of attempt.proposal.patch.split("\n").slice(0, 80)) io.note(`    ${line}`);
+      if (attempt.proposal.patch.split("\n").length > 80) io.note("    …");
+    }
+    if (attempt.rejection) io.note(`  refused: ${attempt.rejection}`);
+    if (attempt.verification) {
+      const verification = attempt.verification;
+      io.note(`  before: ${measurementLine(verification.before)}`);
+      if (verification.after) io.note(`  after:  ${measurementLine(verification.after)}`);
+      for (const target of verification.targets) {
+        io.note(`  ${target.status.toUpperCase()} ${target.issueKey}: ${target.before} → ${target.after}`);
+      }
+      for (const command of verification.build) {
+        io.note(`  ${command.name}: ${command.status}${command.reason ? ` (${command.reason})` : ""}`);
+      }
+      for (const reason of verification.reasons) io.note(`  why: ${reason}`);
+      for (const note of verification.notes) io.note(`  note: ${note}`);
+    }
+    if (index === repair.attempts.length - 1 && attempt.durationMs > 0) {
+      io.note(`  duration: ${attempt.durationMs} ms`);
+    }
+  }
+
+  io.note("");
+  io.note(verdictLine(repair.status));
+  for (const warning of repair.warnings) io.note(`  note: ${warning}`);
+  if (repair.originalUnchanged) {
+    io.note(`  the original source is unchanged (digest ${repair.revision.digest.slice(0, 12)}… before and after)`);
+  } else {
+    io.note("  WARNING: the original source changed during the run; the patch was not applied by UIProof, but re-check the tree.");
+  }
+  if (storedPath) io.note(`Stored in ${storedPath}`);
+  if (sandboxPath) io.note(`Sandbox kept at ${sandboxPath}`);
+
+  let exported: string | null = null;
+  const verified = repair.attempts.find((attempt) => attempt.verdict === "verified") ?? null;
+  if (parsed.out) {
+    if (!verified) {
+      io.note(`No verified patch to export: ${CLI_NAME} only exports a patch a measurement accepted.`);
+    } else {
+      exported = path.resolve(cwd, parsed.out);
+      await writeFile(exported, verified.proposal?.patch.endsWith("\n") ? verified.proposal.patch : `${verified.proposal?.patch ?? ""}\n`, "utf8");
+      io.note(`Verified patch exported to ${exported}`);
+    }
+  }
+  if (verified?.patchArtifact) {
+    io.note(`Patch artifact: ${verified.patchArtifact} (also downloadable from the dashboard)`);
+  }
+  if (repair.status !== "verified") {
+    io.note("Nothing was merged, committed or approved. The working tree is exactly as it was.");
+  }
+
+  const exitCode = repair.status === "verified" ? EXIT_PASS : EXIT_REGRESSION;
+  io.result({
+    command: "repair",
+    status: repair.status,
+    exitCode,
+    scopeKey: repair.target.scopeKey,
+    reportId: repair.target.kind === "report" ? repair.target.id : null,
+    auditId: repair.target.kind === "audit" ? repair.target.id : null,
+    revision: repair.revision,
+    revisionAfter: repair.revisionAfter,
+    originalUnchanged: repair.originalUnchanged,
+    verifiedAttempt: repair.verifiedAttempt,
+    attempts: repair.attempts.map((attempt) => ({
+      attempt: attempt.attempt,
+      verdict: attempt.verdict,
+      rejection: attempt.rejection,
+      proposal: attempt.proposal,
+      verification: attempt.verification,
+      patchArtifact: attempt.patchArtifact ? repairPatchName(attempt.attempt) : null,
+    })),
+    repair,
+    path: storedPath,
+    sandboxPath,
+    exportedPatch: exported,
+  });
+  return exitCode;
+}
+
 export async function runProjects(_parsed: ParsedArgs, io: CliOutput): Promise<CliExitCode> {
   const catalog = await loadProjectCatalog();
   if (catalog.error) {
@@ -667,6 +832,23 @@ function describeFailure(error: unknown): { message: string; hint: string | null
         'Add "sourceDir" to the project in the registration file, or pass --source <directory>.',
       diagnosis_source_invalid: "Check that the source directory exists and is the application you registered.",
       diagnosis_invalid_response: "The model's answer was unusable; nothing was stored and no verdict changed.",
+      repair_unavailable:
+        'A repair needs a configured model and a "repair" block (sandbox, build and test commands) in the project registration.',
+      repair_source_unregistered:
+        'Register "sourceDir" on the project, or pass --source <directory>; a repair never guesses at a source tree.',
+      repair_source_invalid: "Check that the source directory exists and is the application you registered.",
+      repair_source_changed:
+        "The tree changed while it was being copied. Stop editing the application and run the repair again.",
+      repair_nothing_to_repair: "The report has no measured defect to repair.",
+      repair_invalid_response: "The model's answer was unusable; the attempt was recorded and no file was changed.",
+      repair_patch_rejected: "The proposed diff did not apply exactly to the pinned source, so it was refused.",
+      repair_scope_violation:
+        "The proposed diff touched a path a repair may not modify (a secret, dependency, generated file, CI policy or baseline).",
+      repair_limits_exceeded: "The proposal was larger than the patch limits; no file was changed.",
+      repair_sandbox_failed:
+        "The isolated copy could not be started. Check the repair.sandbox command, its url and that the port is free.",
+      repair_measurement_failed:
+        "The candidate could not be measured, so it was not described as repaired. Check the application still serves.",
     };
     return { message: error.message, hint: hints[error.code] ?? null, code: error.code };
   }
@@ -715,6 +897,8 @@ export async function main(argv: readonly string[], cwd: string = process.cwd())
         return await runAudit(parsed, io);
       case "diagnose":
         return await runDiagnose(parsed, io, cwd);
+      case "repair":
+        return await runRepairCommand(parsed, io, cwd);
       case "projects":
         return await runProjects(parsed, io);
       case "baselines":

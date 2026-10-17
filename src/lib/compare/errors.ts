@@ -38,7 +38,20 @@ export type ComparisonErrorCode =
   | "diagnosis_source_unregistered"
   | "diagnosis_source_invalid"
   | "diagnosis_nothing_to_diagnose"
-  | "diagnosis_context_too_large";
+  | "diagnosis_context_too_large"
+  // Phase 8: isolated repair proposals and verification.
+  | "repair_unavailable"
+  | "repair_not_found"
+  | "repair_source_unregistered"
+  | "repair_source_invalid"
+  | "repair_source_changed"
+  | "repair_nothing_to_repair"
+  | "repair_invalid_response"
+  | "repair_patch_rejected"
+  | "repair_scope_violation"
+  | "repair_limits_exceeded"
+  | "repair_sandbox_failed"
+  | "repair_measurement_failed";
 
 const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   invalid_target: 400,
@@ -77,6 +90,20 @@ const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   diagnosis_source_invalid: 400,
   diagnosis_nothing_to_diagnose: 400,
   diagnosis_context_too_large: 400,
+  // A repair is optional infrastructure too. A model or sandbox that is missing is a
+  // service failure; a patch that is unsafe or malformed is the caller's problem.
+  repair_unavailable: 503,
+  repair_not_found: 404,
+  repair_source_unregistered: 400,
+  repair_source_invalid: 400,
+  repair_source_changed: 409,
+  repair_nothing_to_repair: 400,
+  repair_invalid_response: 502,
+  repair_patch_rejected: 400,
+  repair_scope_violation: 400,
+  repair_limits_exceeded: 400,
+  repair_sandbox_failed: 502,
+  repair_measurement_failed: 502,
 };
 
 export class ComparisonError extends Error {

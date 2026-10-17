@@ -22,8 +22,12 @@ approving anything. Phase 6 is the **independent pilot**: the CLI was installed 
 Next.js application written for the exercise, baselines were approved there, four real regressions
 and accessibility defects were planted, detected and reverted, and the result is written up in
 [docs/PILOT.md](docs/PILOT.md) — including the install path that did not exist and the three
-reporting problems the pilot exposed. Later phases add GitHub integration and AI-assisted repair
-proposals — none of that is wired up yet.
+reporting problems the pilot exposed. Phase 7 adds an optional, evidence-grounded **AI diagnosis**
+that explains a stored failure without touching a verdict. Phase 8 adds the **autonomous repair
+experiment**: `uiproof repair` asks a model for one narrowly scoped patch, applies it only inside a
+disposable copy of the registered source, re-runs the same measurements plus the project's build and
+tests, and calls it verified only when the numbers say so. Nothing is merged, committed or approved
+by the tool, and the developer's working tree is never written to.
 
 ---
 
@@ -52,7 +56,7 @@ proposals — none of that is wired up yet.
 - **Local persistence.** Screenshots and the JSON report are written to `.uiproof/data`, so a page
   refresh — or a server restart — keeps the last run, the approved baseline and the version history
   on screen.
-- **An installable CLI.** `pnpm uiproof capture|check|audit|projects|baselines` runs the same engine
+- **An installable CLI.** `pnpm uiproof capture|check|audit|diagnose|repair|projects|baselines` runs the same engine
   without the dashboard, prints one JSON document for automation, and separates "your UI changed"
   (`1`) from "the tool could not answer" (`2`). `pnpm pack` turns it into a package with a `uiproof`
   bin, so another project can install it with `pnpm add -D <tarball>` — verified from a separate
@@ -79,6 +83,17 @@ proposals — none of that is wired up yet.
   could not verify is kept and labelled, never deleted), and the result is stored apart from the
   report: a diagnosis carries no verdict and can never turn a failing gate into a pass. Without a
   key the feature is simply absent and every visual and quality gate works unchanged.
+- **An isolated, measured AI repair experiment.** `uiproof repair --audit <id>` (or `--report <id>`)
+  takes a stored failure, offers a model the measured issue with excerpts of the registered source,
+  and requires a structured proposal: the issue it addresses, a unified diff, the files, the
+  expected improvement and its own uncertainty. The diff is parsed and scope-checked by UIProof —
+  no shell, no renames, no paths outside the source root, no secrets, dependencies, generated output,
+  CI policy, baselines or registration file — then applied only to a disposable copy. The same
+  accessibility, layout and visual measurements run before and after, the project's build and test
+  commands must pass, and the verdict is computed from those numbers: a patch that fixes the target
+  while adding a serious finding is rejected with the evidence that rejected it. The dashboard has
+  an *AI repair* panel that shows every attempt (including failures), before/after screenshots and a
+  downloadable `.patch`; it is visibly separate from the authoritative comparison and audit verdicts.
 - **A CI gate that can actually fail.** [.github/workflows/visual-regression.yml](.github/workflows/visual-regression.yml)
   compares a pull request's code against the approved bundle committed on its base branch, inside the
   pinned rendering image, and lets the comparison's own exit code fail the job. It never captures and
@@ -211,7 +226,7 @@ Create `uiproof.config.json` in the repository root (see
 | `name` | How the project is labelled in the console (1–60 characters). |
 | `origin` | `http(s)://` on a **loopback** host with **no** path, query, credentials or fragment — `http://127.0.0.1:5173`, not `https://staging.example.com`. |
 | `routes` | A non-empty allow-list. Each entry needs an `id`, a `name` and a `path` that starts with `/` and contains no traversal (literal or percent-encoded), query, fragment, backslash or whitespace. |
-| `sourceDir` | Optional, and only used by `uiproof diagnose`: the application source the optional AI diagnosis may read. Relative paths resolve against this file's own directory, so the registration stays portable. Nothing else — capture, comparison, baselines, audits — reads it. |
+| `sourceDir` | Optional, and used by `uiproof diagnose` and `uiproof repair`: the application source the optional AI diagnosis may read, and the tree a repair copies into isolation. Relative paths resolve against this file's own directory, so the registration stays portable. Nothing else — capture, comparison, baselines, audits — reads it. |
 | `allowedOrigins` | Optional. Extra origins the *page* may load resources from while being captured. Empty by default, so a capture is hermetic unless you widen it on purpose. Any `http(s)` origin; wildcards are refused. |
 
 A malformed entry fails the whole file with a message naming the entry, and the console says so — half
@@ -319,6 +334,22 @@ src/
     │   ├── presentation.ts          # pure: findings by impact, viewport blocks, panel model
     │   ├── audit.ts                 # orchestrates one audit across the viewport presets
     │   └── storage.ts               # audit reports + per-viewport screenshots on disk
+    ├── diagnosis/                   # optional evidence-grounded explanation (no verdict)
+    │   ├── context.ts               # measured report/audit → issues, never invented facts
+    │   ├── workspace.ts             # the only source reader: bounded, read-only, escape-proof
+    │   ├── candidates.ts            # which files plausibly produced the element, and why
+    │   ├── prompt.ts · schema.ts    # one bounded request, one strict answer shape
+    │   ├── client.ts                # OpenAI-compatible client, availability, retries, redaction
+    │   └── diagnose.ts · storage.ts # pipeline + `<store>/diagnoses/<id>/diagnosis.json`
+    ├── repair/                      # isolated, measured repair experiment (no verdict on the app)
+    │   ├── revision.ts              # pinned Git SHA + digest; records working-tree state
+    │   ├── patch.ts                 # strict unified-diff parser, scope guard, exact apply
+    │   ├── proposal.ts · prompt.ts  # model answer validation and the bounded repair prompt
+    │   ├── sandbox.ts               # disposable checkout, scrubbed env, no shell, timeouts
+    │   ├── measure.ts               # the same audit engine, run against the sandbox
+    │   ├── verify.ts                # targets, regressions, build/test, verdict policy
+    │   ├── engine.ts                # bounded attempts (max 2), revision on failed evidence
+    │   └── storage.ts               # `<store>/repairs/<id>/` record, patches, screenshots
     ├── http/                        # request trust, capture origin, local-only guard, baseline handlers
     ├── api-client.ts                # typed fetch client used by the console
     └── format-time.ts
@@ -337,12 +368,17 @@ e2e/                                   # browser suite (real Chromium, real serv
 ├── cli.test.ts                        # the CLI through the real process: exit codes, portable bundles
 ├── quality.test.ts                    # the quality gate's seven demonstration points, through the CLI
 ├── quality-hardening.test.ts          # the cap, viewport scoping, portable snapshots, refused scanner
-└── quality-api.test.ts                # the audit HTTP API: evidence links, findings, refusals
+├── quality-api.test.ts                # the audit HTTP API: evidence links, findings, refusals
+├── diagnosis.test.ts                  # the Phase 7 diagnosis pipeline against a local model stub
+├── repair.test.ts                     # the repair engine on the four fixture defects + a bad patch
+└── repair-dashboard.test.ts           # the AI repair panel in a real browser, evidence read back
+support/repair-app.ts                  # a disposable copy of the Phase 8 fixture application
 examples/
 ├── example-app/                       # the independent application (no dependencies)
 │   ├── server.mjs                     #   reads views/ per request; /moved redirects away
 │   ├── views/                         #   home, home.changed, settings, pricing, embedded
 │   └── assets/app.css
+├── repair-app/                        # Phase 8 fixture: four deliberate defects, sandbox-ready
 └── uiproof.config.example.json        # how to register it
 .github/workflows/ci.yml               # install · lint · typecheck · test · build · e2e
 ```
@@ -416,6 +452,11 @@ the engine never renders.
 | `GET`  | `/api/diagnoses?scopeKey=<scope>&limit=n`        | Diagnosis history for one scope, plus whether a model is configured |
 | `POST` | `/api/diagnoses`                                 | **Diagnose** one stored run or audit (`{ reportId }` or `{ auditId }`, optional `maxIssues`) |
 | `GET`  | `/api/diagnoses/:id`                             | One stored diagnosis (read-only; there is no update or delete)            |
+| `GET`  | `/api/repairs?scopeKey=<scope>&limit=n`          | Repair history for one scope, plus what is missing before one can run     |
+| `POST` | `/api/repairs`                                   | **Repair** one stored run or audit (`{ reportId }` or `{ auditId }`, optional `maxAttempts: 1\|2`) |
+| `GET`  | `/api/repairs/:id`                               | One stored repair: every attempt, its measurements and its verdict        |
+| `GET`  | `/api/repairs/:id/patch?attempt=n`               | A stored attempt's diff as a `.patch` download                            |
+| `GET`  | `/api/repairs/:id/artifacts/:name`               | A before/after screenshot or diff named by the stored record              |
 
 `POST /api/compare` and `POST /api/baselines` accept one of two bodies. Phase 3 spelling, which is
 what the console sends:
@@ -577,6 +618,7 @@ writers, and the portable-bundle module.
 | `uiproof check --project <id> --route <id>` | Captures the route and diffs it against its approved baseline |
 | `uiproof audit --project <id> --route <id>` | Measures accessibility and layout and judges them by policy |
 | `uiproof diagnose --report <run id> \| --audit <audit id>` | Explains a stored failure with the configured model (optional) |
+| `uiproof repair (--audit <audit id> \| --report <run id>) [--max-attempts 1\|2]` | Proposes, isolates and measures a repair for a stored failure (optional; never applies it to your tree) |
 | `uiproof projects` | Lists the projects and routes in the registration file |
 | `uiproof baselines [status]` | Shows the approved baselines, their versions and which one is active |
 | `uiproof baselines export (--project <id> \| --all) --out <dir>` | Writes a portable baseline bundle |
@@ -586,7 +628,7 @@ writers, and the portable-bundle module.
 Options: `--project`, `--route`, `--viewport desktop|tablet|mobile`, `--config <file>`,
 `--storage <dir>`, `--tolerance <pct>`, `--quality`, `--fail-on <impact>`, `--new-only`, `--wcag-only`,
 `--max-document-overflow <px>`, `--max-element-overflow <px>`, `--report <run id>`,
-`--audit <audit id>`, `--source <dir>`, `--max-issues <n>`, `--approve`, `--note <text>`, `--out`,
+`--audit <audit id>`, `--source <dir>`, `--max-issues <n>`, `--max-attempts <n>`, `--approve`, `--note <text>`, `--out`,
 `--from`, `--activate`, `--all`, `--json`, `--quiet`. `pnpm uiproof --help` is the full text;
 `pnpm build:cli` refreshes the bundle without running a command.
 
@@ -600,8 +642,8 @@ pnpm uiproof check --project example-app --route home
 
 | Code | Meaning |
 | ---- | ------- |
-| `0` | the comparison passed — or a capture was stored, because a capture is never a pass |
-| `1` | a visual regression was detected — or the quality policy failed (`audit`) |
+| `0` | the comparison passed — or a capture was stored, because a capture is never a pass — or a repair was verified |
+| `1` | a visual regression was detected, the quality policy failed (`audit`), or no repair could be verified |
 | `2` | configuration, baseline, browser or infrastructure error: the tool could not answer |
 
 These are the interface. `2` is deliberately distinct from `1`: an unusable registration file, a
@@ -755,6 +797,121 @@ one that does not; the prompt says which lines matched, and the absence of a can
 a warning rather than filled in. The model sees excerpts, not the repository, and can be wrong — its
 answer is a hypothesis with a confidence, never a measurement. Nothing is written to the source tree,
 no patch is produced, and no pull request is opened.
+
+### AI repair (optional, experimental)
+
+Explaining a defect is not fixing it. `uiproof repair` takes the next step without ever editing your
+tree: it asks a model for one narrowly scoped patch, applies that patch to a **disposable copy**, and
+re-runs UIProof's own measurements before and after. The verdict belongs to the measurements, not to
+the model.
+
+```bash
+export UIPROOF_AI_API_KEY=...          # any OpenAI-compatible endpoint, as for diagnose
+
+pnpm uiproof repair --audit audit-51117643
+pnpm uiproof repair --report run-e62644f5 --max-attempts 1
+pnpm uiproof repair --audit audit-51117643 --out ./verified.patch
+```
+
+A project registers how its copy is built, served and tested — all four are developer-authored, and a
+model can never supply a command:
+
+```json
+{
+  "id": "repair-app",
+  "origin": "http://127.0.0.1:4180",
+  "sourceDir": "examples/repair-app",
+  "routes": [
+    { "id": "support", "name": "Support", "path": "/" },
+    { "id": "manual", "name": "Manual", "path": "/manual" }
+  ],
+  "repair": {
+    "sandbox": {
+      "command": ["node", "server.mjs"],
+      "url": "http://127.0.0.1:4199",
+      "readyPath": "/healthz"
+    },
+    "build": ["node", "scripts/check-build.mjs"],
+    "test": ["node", "scripts/check-tests.mjs"],
+    "allow": ["views/**"],
+    "guardRoutes": ["manual"],
+    "entryFiles": ["views/index.html"]
+  }
+}
+```
+
+What one repair run does, in order:
+
+1. **Pins the revision.** The source's Git SHA and working-tree status are recorded, plus a SHA-256
+digest of every copied source file. An attempt is tied to that exact revision; if the files change
+while they are being copied, the run is refused rather than pinned to a mixture.
+2. **Measures the failure first.** The unmodified copy is started in the sandbox and the same audit
+engine measures it — the target route at the affected viewport, plus the declared guard routes — and
+the configured build and test commands run once as a baseline. If the original already fails its own
+build or tests, the run says so up front instead of later claiming it kept them passing.
+3. **Asks for one candidate.** The prompt carries only measured issues (`a11y:label@#email`,
+`responsive:mobile`, `visual:desktop`, …), their evidence, and bounded excerpts of files that
+actually exist in the copy. The model must answer with structured JSON: the issue key it addresses,
+the diff, the affected files, a summary, the expected measurable improvement, its confidence and its
+uncertainty. Markdown fences are tolerated; unvalidated prose is not.
+4. **Checks the diff before applying it.** UIProof parses the unified diff itself — never `git apply`,
+never a shell — and refuses renames, creation or deletion of a whole file, paths outside the listed
+source, backslashes, absolute or drive-qualified paths, symlinks, no-op hunks and failed context
+matches. Secrets and key material, dependencies and lockfiles, generated output, Git metadata, CI
+policy, test snapshots, the registration file and baseline stores are refused by name and reported
+with the reason. A patch may touch at most 4 files and 200 changed lines, and the run is bounded in
+wall-clock time and model tokens.
+5. **Applies it only to the copy.** The patch rewrites files in the disposable directory; a fresh
+sandbox process then serves that copy. Environment variables are allow-listed, so a new secret in the
+developer's shell is not handed to generated code; commands are argument vectors with `shell: false`;
+listening is bound to loopback. The original directory is hashed again after the run and reported as
+unchanged — the tests assert it byte-for-byte.
+6. **Re-measures and decides.** The same measurements run on the patched page. The verdict is
+computed:
+
+| Verdict | Meaning |
+| ------- | ------- |
+| `verified` | Every target defect disappeared, no previously passing check regressed, no new serious/critical accessibility finding appeared, layout did not get worse, the build and tests pass, and every changed file was inside the approved scope |
+| `partially-improved` | The target improved but something still blocks a full pass — measured, with each reason named |
+| `rejected` | The target did not improve, a regression appeared, the build or tests failed, or the patch was refused before it ran |
+| `unverified` | The candidate could not be measured (a sandbox or capture failure) — never reported as a fix |
+
+A deliberately bad patch is the test that matters most: fixing the missing accessible name while
+introducing a low-contrast heading is measured as `fixed` for the target and rejected for
+`1 new serious/critical finding(s) appeared at support@mobile: color-contrast@h1`.
+
+7. **Records the evidence, then stops.** One attempt is the default for the CLI; at most two are
+allowed. A failed attempt is kept with its patch, measurements and reasons, and the second request
+is a revision that carries that evidence. There is no retry loop beyond `maxAttempts`.
+
+`uiproof repair` exits `0` only for a verified patch, `1` when no attempt verified, and `2` when the
+repair could not run (no key, no source nor sandbox registration, an unknown target). `--json` returns
+the whole record. `--out <file>` writes the verified diff as a standalone `.patch` — the only way a
+patch leaves UIProof, and applying it stays a manual act.
+
+The dashboard shows the same evidence in an **AI repair** panel on a failing audit or run: the
+measured issue, the model's diff behind a `model-generated` badge, before and after screenshots, each
+verification check, rejected attempts with their reasons, and a download link for every stored
+attempt. The panel is deliberately separate from the comparison and audit verdicts, which never move
+because a repair was attempted.
+
+**What isolation does and does not mean.** The copy is a filesystem and environment boundary, not a
+container: sandboxed application code runs with the developer's own OS privileges. Commands are
+limited to what the registration declares, serve on loopback and receive an allow-listed environment,
+and the original tree, baselines and Git metadata are never written to — but this is not a security
+boundary against deliberately hostile code, and the README states that rather than implying more.
+
+**Limitations, stated plainly.** The model sees bounded excerpts, so it can miss the cause or propose
+a patch for the wrong line; every proposal is a hypothesis until the measurements run. Source files
+must be inside the registered `sourceDir`, and a visual-regression repair needs the project to name
+its entry file because a screenshot carries no selector. Verification covers the measured routes and
+viewports, the configured build and tests, and observable accessibility/layout/visual state — it
+cannot prove the absence of defects it does not measure. No live model provider was contacted while
+building this; the pipeline is proven against a deterministic OpenAI-compatible stub, and real-model
+repair quality is therefore unmeasured here.
+
+[examples/repair-app](examples/repair-app) is a runnable fixture with all four defects and the build
+and test commands above; its README shows the two commands that audit it and repair it by hand.
 
 ### Portable approved baselines
 
@@ -948,7 +1105,8 @@ typecheck, unit tests, production build, Chromium install, browser suite.
 
 ## Testing
 
-`pnpm test` runs **334 unit tests** across 26 files, all covering the engine, the guards, the baseline
+`pnpm test` runs **383 unit tests** across 31 files (382 pass and one skips itself on a host without symlink
+privilege), all covering the engine, the guards, the baseline
 store, the portable bundles, the quality measurements, the optional diagnosis, the CLI's parser and
 the pinned CI environment rather than the UI shell (one test skips itself on a Windows host without
 symlink privilege; the junction-escape case runs everywhere):
@@ -980,6 +1138,11 @@ symlink privilege; the junction-escape case runs everywhere):
 | `lib/diagnosis/schema.test.ts` | The model's answer treated as hostile input: a valid answer accepted with its cited line verified against the excerpt, a fenced answer accepted, a fabricated file or an out-of-excerpt line kept as an unverified citation with the reason, an invented or repeated issue key refused, a missing field, a bad confidence or an over-long string refused, prose around the JSON refused, a skipped issue reported as a gap, and extra issues ignored with a warning |
 | `lib/diagnosis/client.test.ts` | The OpenAI-compatible client with a scripted `fetch`: configuration from `UIPROOF_AI_*`/`OPENAI_*` without a key, defaults, clamping, base URLs with credentials or a query refused, availability described without the key, the request shape (endpoint, bearer header, temperature 0, JSON mode), a retry without `response_format`, a retry on `429`, rejected credentials naming neither the key nor a stack, a wrong base URL, a non-JSON body, an oversized response, a timeout and an unreachable endpoint |
 | `lib/diagnosis/diagnose.test.ts` | The whole pipeline against the real report/audit stores and a real temporary source tree, with only the network faked: measured facts preserved, the cited line verified against the file, persistence under `diagnoses/`, the key never stored, prompt assembly, an issue the model skipped left `null`, the issue cap, a visual regression explained from a run, `--source` overriding the registration, unavailable model / unregistered or missing source / passing run / unknown or ambiguous id / malformed answer / invented key / repeated 5xx all refused with nothing stored, the source tree untouched, and a stored diagnosis carrying no status or verdict |
+| `lib/repair/patch.test.ts` | The diff as hostile input: a clean hunk applied exactly, context mismatch refused, renames and `/dev/null` refused, traversal, absolute and drive paths refused, backslashes refused, hidden paths, dependencies, generated output, key material, lockfiles, CI policy and the registration file refused by name, a path outside the copied source refused, the project allow-list enforced, no-op patches and overlapping hunks refused, and the file/line limits enforced |
+| `lib/repair/proposal.test.ts` | The model's structured answer: every required field, confidence and uncertainty validated, an unknown issue key refused, an oversized or non-string patch refused, fenced JSON accepted, prose refused, and the parsed patch summaries computed from the diff |
+| `lib/repair/prompt.test.ts` | What the model is shown: only measured issues, bounded excerpts of files that exist, the previous attempt's evidence on a revision, and nothing from outside the registered copy |
+| `lib/repair/verify.test.ts` | The verdict policy on measured before/after pairs: a fixed target with nothing else moving verifies, a fixed target with a new serious finding is rejected, an untouched target is rejected, an improvement that does not clear the defect is `partially-improved`, a build or test failure blocks verification, a failed scope check rejects, and an unmeasurable candidate is `unverified` — never a pass |
+| `lib/repair/revision.test.ts` | The pinned revision: commit SHA and dirty state read from a real Git repository, an empty or absent Git state reported rather than invented, the content digest stable across copies, a changed file or a deleted directory reported as stale, and the original tree proven identical after a run |
 
 `diff.test.ts` is the important one: it builds synthetic PNGs in memory and asserts **exact** pixel
 counts (e.g. a 10 × 10 block changed on a 100 × 100 white canvas is exactly 100 pixels and 1 %).
@@ -991,7 +1154,7 @@ would look, and asserts that every one of them is refused.
 
 ### Browser suite
 
-`pnpm test:e2e` runs **71 tests** across 9 files in real Chromium, against a real `next start` server
+`pnpm test:e2e` runs **77 tests** across 11 files in real Chromium, against a real `next start` server
 on a throwaway data directory ([e2e/](e2e)):
 
 | File | Coverage |
@@ -1005,6 +1168,8 @@ on a throwaway data directory ([e2e/](e2e)):
 | `quality-hardening.test.ts` | The three ways a quality gate can silently pass, each measured on the live page: 68 findings against a 60-finding display cap where the only serious violation sorts *past* the cap (the truncated list contains nothing severe, the verdict fails on it anyway and the note says all 68 were evaluated); a desktop-only approval that leaves the same fingerprints new at mobile and tablet while the desktop-only `--new-only` audit passes; those snapshots surviving export → wiped store → import with an identical classification; and a CSP page that blocks axe-core's injection answering exit `2` with `quality_unavailable` and nothing persisted |
 | `quality-api.test.ts` | The audit HTTP API against a registered application: a clean audit with working evidence links (per-viewport PNGs and `audit.json`), a real code change producing findings by impact and layout defects only at the narrow viewport, the history listing newest first with summaries that match their reports, and the refusals — cross-site requests, unknown projects, bad policy and viewport input, path traversal on the evidence route |
 | `diagnosis.test.ts` | The Phase 7 workflow through the real CLI and HTTP API: the pilot's defects (missing accessible name, contrast failure, mobile overflow) rendered by the example application, audited with Chromium and axe-core, then explained by `uiproof diagnose` against a **local OpenAI-compatible stub** that answers only the issue keys UIProof sent and cites only the excerpt it was shown — asserting the cited line really contains `id="support-email"`, zero unverified citations, the audit verdict unchanged, the diagnosis stored in its own directory; plus exit `2` and nothing stored without a key, both `--report` and `--audit` refused together and neither accepted alone, a missing source directory refused before the model is contacted, and the dashboard API: availability without disclosing a key, `invalid_options`, cross-site `403`, and `404` for a report or diagnosis that does not exist |
+| `repair.test.ts` | The Phase 8 engine on the fixture's four independent defects, each through audit → proposal → isolated patch → build and tests → re-measurement → verdict: a missing accessible name fixed on a second, evidence-driven attempt while the first is rejected as no-change; insufficient contrast fixed with the unrelated missing-name finding left in place and not called a regression; 354 px mobile overflow reduced to 0 px; a 4,049-pixel visual regression reduced to 0 against the baseline, whose manifest and image are byte-identical afterwards; and a bad patch that fixes the target while adding a contrast violation rejected with the finding that caused it. Every test asserts the source file is unchanged. Only the model is a stub |
+| `repair-dashboard.test.ts` | The *AI repair* panel in a real browser against a real production server: a failing audit is produced through the HTTP endpoint, the stored audit is reloaded, the panel offers the repair, the engine runs against a deterministic model stub, and the panel renders `verified`, attempt 1, the measured evidence, the unchanged-tree marker, four loaded screenshots and a downloadable patch whose bytes contain the fix — while the authoritative audit panel still says `fail` |
 
 The lifecycle, in the order the suite checks it:
 
@@ -1267,16 +1432,37 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
   the real HTTP interface against a local OpenAI-compatible stub, including schema validation,
   citation verification and CLI/API behaviour; a genuine provider call still depends on the operator's
   credentials, and no provider was contacted from this checkout.
+- **A repair is an experiment, not a merge.** `uiproof repair` never writes to the registered source,
+  never changes a baseline and never commits or opens a pull request. Applying a verified `.patch` is
+  a manual action, and the evidence proves only what was measured: the target route and guard routes
+  at the audited viewports, the configured build and test commands, and the observable
+  accessibility/layout/visual state.
+- **The sandbox is a copy, not a container.** Isolated code runs with the developer's OS privileges.
+  Commands are limited to the registration (`shell: false`), the environment is allow-listed and the
+  server is loopback-bound, but a genuinely hostile application could still act within those
+  privileges. Treat it as protection against accidental edits, not against malware.
+- **Repair verification is scoped to what UIProof measures.** A patch that changes behaviour outside
+  the measured routes, or introduces a defect the current rule set and viewports do not observe, is
+  not caught by it. The build and test commands are the developer's own gate and must be registered,
+  or the panel reports that it cannot run a repair.
+- **At most two attempts, one patch each, 4 files and 200 lines.** A failed attempt is kept with its
+  evidence and is never retried automatically beyond that budget; a defect spanning more files than
+  the patch limit requires a human change.
+- **Real-model repair quality is unmeasured here.** Every deterministic test uses a stub that returns
+  a patch chosen by the test, which proves the isolation, validation and verification pipeline — not
+  how often a real model finds the right line. That is the honest boundary of the Phase 8 evidence.
 
 ---
 
 ## Next milestone
 
-Phase 7 delivered the optional, evidence-grounded AI diagnosis: `uiproof diagnose`, the console's
-*AI diagnosis* panel, the diagnosis API, and a read-only source investigation whose every citation is
-verified against the line UIProof actually read. A diagnosis has no verdict and cannot move one.
+Phase 8 delivered the autonomous repair experiment: `uiproof repair`, the console's *AI repair* panel,
+the repair API, and an isolated, measured pipeline that proposes one scoped patch, applies it only to
+a disposable copy, re-runs the same measurements plus the project's build and tests, and rejects a
+candidate that fixes the target while creating a regression. The original tree is unchanged after
+every run, and no patch is ever merged or committed.
 
-The sharpening work below is still next:
+What it needs next is the context it cannot invent, and a wider evidence base:
 
 **Making the gate sharper, and cheaper to run everywhere.**
 
@@ -1292,11 +1478,13 @@ The sharpening work below is still next:
    remaining step, and the store format stays unchanged.
 5. **Multi-viewport approvals.** One approval covering desktop/tablet/mobile, with per-viewport pass
    or fail in a single report.
-6. **Diagnosis built on the above.** An optional, evidence-grounded explanation is delivered
-   (Phase 7). What would make it sharper is exactly the missing context from this list: a git SHA per
-   run so an explanation can name the change, and ignore regions so a volatile area is not explained
-   as a defect. **Then GitHub integration and AI repair proposals** — after all of the above, not
-   before, and still without a diagnosis ever changing a verdict.
+6. **Diagnosis and repair built on the above.** An explanation is delivered (Phase 7) and a measured
+   repair experiment is delivered (Phase 8). What would make both sharper is exactly the missing
+   context from this list: a git SHA per **run** (repairs already pin one) so an explanation can name
+   the change that broke a page, and ignore regions so a volatile area is neither explained nor
+   "repaired" as a defect. **Then a live-model evaluation** across a corpus of real defects, GitHub
+   integration as an optional reviewer of verified patches, and only then any question of opening a
+   pull request automatically — which this phase deliberately does not do.
 
 ---
 

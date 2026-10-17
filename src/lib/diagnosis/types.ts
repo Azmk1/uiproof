@@ -131,6 +131,16 @@ export interface DiagnosisModelInfo {
   readonly jsonModeFallback: boolean;
 }
 
+/**
+ * The exact source bytes a diagnosis was based on, per file, so a later read can say
+ * whether the citations still point at the same code. Optional: diagnoses written before
+ * Phase 8 carry no snapshot, and that is reported as "cannot tell", never as "current".
+ */
+export interface DiagnosisSourceSnapshot {
+  /** Path relative to the registered root → SHA-256 of the file when it was read. */
+  readonly files: Readonly<Record<string, string>>;
+}
+
 /** One persisted diagnosis. */
 export interface Diagnosis {
   readonly id: string;
@@ -148,6 +158,8 @@ export interface Diagnosis {
   readonly model: DiagnosisModelInfo;
   readonly issues: readonly DiagnosedIssue[];
   readonly warnings: readonly string[];
+  /** Phase 8: the bytes each cited file had when the diagnosis was produced. */
+  readonly sourceSnapshot?: DiagnosisSourceSnapshot | null;
   /** Literal marker: every word below `issues[].diagnosis` came from a model. */
   readonly aiGenerated: true;
 }
@@ -195,6 +207,19 @@ export interface DiagnosesResponse {
   readonly availability: DiagnosisAvailability;
 }
 
+export interface StaleSources {
+  readonly checked: number;
+  readonly stale: readonly string[];
+  readonly missing: readonly string[];
+  readonly reason: string | null;
+}
+
 export interface DiagnosisResponse {
   readonly diagnosis: Diagnosis;
+  /**
+   * Whether the source files this diagnosis read still have the bytes it saw. `null` when
+   * the diagnosis predates snapshots or the check could not run; always a report, never a
+   * claim that a reference is still correct.
+   */
+  readonly staleSources?: StaleSources | null;
 }

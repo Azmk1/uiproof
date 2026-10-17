@@ -3,12 +3,13 @@
 **North star:** an automated frontend quality platform that detects visual regressions,
 accessibility problems and design inconsistencies — see `docs/GOAL.md`.
 
-**Current milestone:** Phase 6 — the independent developer pilot.
+**Current milestone:** Phase 8 — autonomous repair engine and verification.
 **Status:** complete, verified, committed.
 
 Phase 1 = 8 / 8 criteria (100 %) · Phase 2 = 10 / 10 criteria (100 %) · Phase 3 =
 12 / 12 criteria (100 %) · Phase 4 = 12 / 12 criteria (100 %) · Phase 4.5 = 7 / 7 criteria (100 %) ·
-Phase 5 = 9 / 9 · Phase 5.1 = 7 / 7 · **Phase 6 = 8 / 8 criteria (100 %)**.
+Phase 5 = 9 / 9 · Phase 5.1 = 7 / 7 · Phase 6 = 8 / 8 · Phase 7 = 8 / 8 ·
+**Phase 8 = 10 / 10 criteria (100 %)**.
 
 ---
 
@@ -698,6 +699,58 @@ touch a verdict.
 
 ---
 
+## Phase 8 — autonomous repair engine and verification
+
+**Goal:** take an actually broken frontend, propose one narrowly scoped repair, test it in an
+isolated copy with the same measurements UIProof already trusts, reject it when it does not hold up,
+and leave independently verifiable evidence — without ever altering the developer's working tree.
+
+### Acceptance criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | **Diagnosis baseline is trustworthy:** live-model behaviour measured when credentials exist, citations vs causation kept distinct, source selection improved only with test evidence, Git revision recorded, stale references detected | **Verified (live model unverified)** | The Phase 7 pipeline is unchanged in behaviour and still passes its 88 tests, including citation verification against the line UIProof read. Phase 8 adds `revision.ts`: commit SHA, `git status` dirty state and up to 50 changed paths recorded per repair, plus a SHA-256 digest over every copied source file; `revision.test.ts` proves a changed or deleted file is reported stale. No `UIPROOF_AI_API_KEY`/`OPENAI_API_KEY` exists in this environment, so **no live provider call was made** and no claim about real-model quality is made |
+| 2 | **Structured repair proposal:** measured issue, source change, explanation, files, expected improvement, uncertainty; validated patch output; never execute model commands | **Verified** | `proposal.ts` validates every field, the issue key against the offered list, confidence, uncertainty, size and patch shape; fences are tolerated and prose is refused. `prompt.ts` shows only measured issues plus bounded excerpts. Commands come only from the registration; `sandbox.ts` runs argument vectors with `shell: false`. `proposal.test.ts` / `prompt.test.ts` cover the refusals |
+| 3 | **Isolated execution:** disposable checkout at a pinned revision, stale/unsafe paths refused, patches checked first, no baseline changes, clean sandbox environment, original preserved | **Verified** | `sandbox.ts` copies the registered `sourceDir` into a temporary directory with file/size caps, records the digest, refuses a tree that changes during the copy, and deletes it afterwards. `patch.ts` refuses traversal, absolute/drive/backslash paths, renames, `/dev/null`, hidden files, credentials, dependencies, generated output, CI policy, baselines and the registration file — all with a reason. Sandbox environment is allow-listed; sandbox URLs must be loopback; nothing writes to the source, a baseline or Git metadata. Tests assert the source file is byte-identical after every run |
+| 4 | **Deterministic verification:** original defect gone, no passing route/viewport regressed, no new serious/critical findings, overflow improved or not worsened, build and tests pass, patch inside scope | **Verified** | `measure.ts` runs the real audit engine and the visual comparison against the sandbox; `verify.ts` classifies each target (fixed/improved/unchanged/not-measured), each regression (accessibility / layout / visual / build / test / scope), and computes `verified`, `partially-improved`, `rejected` or `unverified` from those measurements only. `verify.test.ts` covers every branch, including the deliberately bad patch |
+| 5 | **Bounded iteration:** at most two attempts, evidence-driven revision, visible reasons, hard limits | **Verified** | `engine.ts` refuses `maxAttempts` outside 1–2, and the CLI clamps it. A failed attempt's recorded reasons and measurements are carried into the revision prompt (asserted by `e2e/repair.test.ts`: the second prompt contains `Previous attempt 1 was REJECTED`). Limits recorded in the run: 2 attempts, 4 patch files, 200 patch lines, 48,000 patch characters, 120 s per command, a wall-clock run budget and `UIPROOF_AI_MAX_TOKENS` |
+| 6 | **CLI and developer experience:** `uiproof repair --audit <id>` plus failed reports, defects/diff/verification/screenshots/remaining issues/safety, export a verified patch, never merge/commit/approve | **Verified** | `runRepairCommand` in `src/cli/main.ts`: `--report`/`--audit` (exactly one), `--max-attempts 1|2`, `--out` writing the verified patch, `--json` with the full record. Exit `0` only for verified, `1` for no verified repair, `2` when it could not run. Five end-to-end scenarios in `e2e/repair.test.ts` drive the real engine; the patch download route serves `text/x-diff` from the stored record only |
+| 7 | **Dashboard:** inspect candidates, compare results, view rejected attempts, download verified patches, status separate from authoritative verdicts | **Verified** | `repair-panel.tsx` renders in the failing run/audit path with a `model-generated` badge, the measured issue, the diff, before/after screenshots, every verification line, every attempt (including rejected ones with the reason) and a download link. It has its own `aria-label="AI repair"` section and never writes to the comparison or audit verdict. `e2e/repair-dashboard.test.ts` drives it in a real browser and asserts the audit panel still says `fail` |
+| 8 | **Controlled real-world experiments:** missing name, contrast, mobile overflow, CSS visual regression; original tree unchanged; bad patch rejected | **Verified** | `e2e/repair.test.ts` runs all five scenarios on `examples/repair-app` with Chromium, axe-core and real PNG diffs. Only the model is a deterministic stub. Measured results below |
+| 9 | **Preserve Phase 1–7 and verify everything:** lint, typecheck, unit, build, browser, CLI, repair tests | **Verified** | `pnpm lint` clean, `pnpm typecheck` clean, **383 unit tests** across 31 files (382 pass, 1 skipped on a host without symlink privilege), production build succeeds, **77 browser tests** across 11 files, including the 5 repair-engine scenarios, the dashboard panel, the CLI suite and every earlier phase |
+| 10 | **Document and deliver:** actual model performance, attempts, verified successes, failures, cost, limitations, security assumptions; commit and push without force | **Verified** | README gains an *AI repair* section, registration fields, API routes, test rows and limitations; [PHASE8-REPORT.md](PHASE8-REPORT.md) records the evidence table, the measured before/after values, the cost bounds and the exact security assumptions; commit SHA and test counts are in that report |
+
+### Milestone log
+
+| Milestone | Outcome |
+|-----------|---------|
+| M56 — revision and isolation | `revision.ts` (Git SHA, dirty state, content digest, stale detection) and `sandbox.ts` (disposable copy, caps, scrubbed env, no shell, loopback only, readiness polling, teardown in `finally`); 8 unit tests |
+| M57 — patch safety | `patch.ts`: a strict unified-diff parser and exact applier with no fuzz, a named denylist for every class of file a repair may not touch, extension and allow-list checks, and 4-file/200-line limits; 20 unit tests |
+| M58 — proposal | `proposal.ts` (strict schema, issue-key validation, patch summarisation) and `prompt.ts` (measured issues, bounded excerpts, revision evidence); 10 unit tests |
+| M59 — verification | `measure.ts` (audit + visual diff of the sandbox, before and after) and `verify.ts` (targets, regressions, build/test, scope, verdict policy with reasons); 12 unit tests |
+| M60 — bounded engine | `engine.ts`: revision pinning, baseline measurement, baseline build/test, optional revision on failure, attempt budget, run budget, warnings, storage of every attempt; `storage.ts` writes `repairs/<id>/repair.json`, patches and screenshots |
+| M61 — CLI | `uiproof repair` with exit-code discipline, patch export and JSON output; parser tests |
+| M62 — HTTP and dashboard | `/api/repairs` (GET history + availability, POST run), `/api/repairs/:id`, patch and artifact routes; `repair-panel.tsx` wired into the audit card and run view |
+| M63 — fixtures and end to end | `examples/repair-app` (four defects, a structural build check, a real test command, a registration file), `e2e/support/repair-app.ts`, `e2e/support/stub-model.ts`, 5 engine scenarios and 1 dashboard scenario |
+| M64 — audit and documentation | Full verification run, README, PROGRESS and PHASE8-REPORT |
+
+### Evidence
+
+| Check | Result |
+|-------|--------|
+| Unit suite | **382 passed**, 1 skipped, 31 files. Repair area: 52 tests across 5 files |
+| Browser suite | **77 passed** / 11 files, including 6 repair tests |
+| Missing accessible name | Audit `fail` with `a11y:label@#email` (critical). Attempt 1 (a comment only) **rejected**: "did not improve: the same rule still fires on the same element". Attempt 2 added `<label for="email">Email</label>` → **verified**; support@mobile critical findings **1 → 0**, violations **2 → 1**, guard route `manual@desktop` **0 → 0** |
+| Insufficient contrast | `.note` changed from `#9a9a9a` to `#595959` → **verified**; support@mobile serious **1 → 0**, violations **2 → 1**, the unrelated `label@#email` finding stayed and was **not** reported as a regression |
+| Mobile horizontal overflow | banner `width: 720px` → `max-width: 100%` → **verified**; document overflow **354 px → 0 px**, escaping elements **1 → 0** |
+| Visual regression | `padding: 8px 4px` → `24px 16px` against an approved baseline → **verified**; changed pixels **4,049 (0.3954 %) → 0**, status `regressed → match`; the baseline manifest and PNG were byte-identical afterwards |
+| Deliberately bad patch | Fixes the missing name while making the `<h1>` low-contrast → target `fixed`, but **rejected**: "1 new serious/critical finding(s) appeared at support@mobile: color-contrast@h1" |
+| Original tree | Every scenario asserts the fixture's `views/index.html` is byte-identical after the run; the dashboard test asserts the API's `originalUnchanged: true` and re-reads the file |
+| Isolation | `/tmp` copy, `shell: false`, allow-listed environment, loopback sandbox, sandbox deleted after the run; the audit JSON, baseline store and source are never written |
+| Live model | **Not run** — no credentials in this environment. All model behaviour described above is a deterministic OpenAI-compatible stub; the pipeline, not model quality, is what was measured |
+
+---
+
 ## Decisions made during implementation
 
 - **Route groups** `(console)` / `(fixtures)` keep console chrome off the screens under test.
@@ -734,7 +787,8 @@ touch a verdict.
   need a human; they are never counted as failures.
 - "New findings" need an approved reference: without an approved baseline's accessibility snapshot
   an audit cannot say which findings are new, and says so instead of guessing.
-- No git SHA on a run yet, so a regression cannot yet name the commit that caused it.
+- No git SHA on a comparison **run** yet, so a regression cannot yet name the commit that caused it.
+  A repair pins one for the tree it copies and records it with the run.
 - Writes are local-only by rule (loopback bind + same origin), not by identity: there is no auth,
   no multi-tenancy and no queue. Concurrent runs share one Chromium.
 - Cross-process safety assumes one machine and a local filesystem; there is no distributed lock.
@@ -785,6 +839,21 @@ touch a verdict.
   tool use. Oversized material is dropped with a warning rather than silently truncated.
 - **No live provider call was made during verification.** The deterministic stub exercises the real
   HTTP interface; a genuine OpenAI-compatible call still depends on the operator's credentials.
+- **A repair is an isolated experiment, not a merge.** It never writes to the registered source, never
+  changes an approved baseline and never commits or opens a pull request; applying a verified patch is
+  a manual action. The evidence proves only what was measured — the target and guard routes at the
+  audited viewports, the configured build and test commands, and observable accessibility, layout and
+  visual state.
+- **The repair sandbox is a copy, not a container.** Generated application code runs with the
+  developer's own OS privileges. Commands are limited to the registration and executed without a
+  shell, the environment is allow-listed and the server is loopback-bound, but this is protection
+  against accidental edits, not a boundary against hostile code.
+- **Repair proposals are bounded and capped.** At most two attempts, 4 files and 200 changed lines per
+  patch, one bounded model request per attempt. A defect that needs a wider change is out of scope and
+  the run records the refusal rather than stretching the limits.
+- **Repair quality with a real model is unmeasured here.** The deterministic stub proves the
+  isolation, validation and verification pipeline — the numbers above are real measurements of real
+  patches — but not how often a live model proposes the right one. That remains the honest gap.
 
 ## Blockers
 
@@ -814,11 +883,19 @@ covered by deterministic unit tests and a real end-to-end run of the pilot's def
 provider was called because no credentials were configured here, and that is reported rather than
 implied.
 
+Phase 8 is delivered: `uiproof repair` and the console's *AI repair* panel take a stored failure
+through proposal → scope-checked diff → isolated copy → re-measurement → build and tests → verdict,
+with every attempt stored. Five deterministic end-to-end scenarios cover all four required defects
+and a deliberately bad patch, and each asserts the developer's tree is byte-identical afterwards.
+No live model provider was called; that limitation is recorded here and in
+[PHASE8-REPORT.md](PHASE8-REPORT.md) rather than dressed up as model performance.
+
 The sharpening work from the pilot's friction list is still the next milestone: ignore regions
-recorded in the report, a git SHA per run (which would also make a diagnosis name the change it
-explains), `uiproof check --all` across a whole project, the CLI published to a registry (the pilot
-took it as far as an installable tarball), and multi-viewport approvals. Two smaller items belong
-with it: an automated check that the manual branch protection settings in `docs/BASELINE-UPDATES.md`
-are actually configured, and a scheduled regeneration probe that fails when a new image digest
-changes rendering rather than letting it surface as a mystery regression. Details at the end of the
-README.
+recorded in the report, a git SHA per **run** (repairs already pin one), `uiproof check --all` across
+a whole project, the CLI published to a registry (the pilot took it as far as an installable
+tarball), and multi-viewport approvals. Two smaller items belong with it: an automated check that the
+manual branch protection settings in `docs/BASELINE-UPDATES.md` are actually configured, and a
+scheduled regeneration probe that fails when a new image digest changes rendering rather than
+letting it surface as a mystery regression. For repair, the next evidence to gather is real-model
+repair success across a corpus of defects and a cost/latency baseline — then, and only then, an
+optional review workflow for verified patches. Details at the end of the README.

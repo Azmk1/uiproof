@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { toApiError } from "@/lib/compare/errors";
 import type { ApiErrorBody } from "@/lib/compare/types";
 import { readDiagnosis } from "@/lib/diagnosis/storage";
+import { detectStaleSources } from "@/lib/repair/revision";
 import type { DiagnosisResponse } from "@/lib/diagnosis/types";
 
 /**
@@ -19,7 +20,12 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       const body: ApiErrorBody = { error: { code: "report_not_found", message: `No stored diagnosis with id ${id}.` } };
       return NextResponse.json(body, { status: 404 });
     }
-    const payload: DiagnosisResponse = { diagnosis };
+    // A stored diagnosis is a snapshot of code, not a live claim. Re-hash the files it
+    // read and report anything that moved, instead of letting a citation look current.
+    const staleSources = diagnosis.sourceSnapshot
+      ? await detectStaleSources(diagnosis.sourceRoot, diagnosis.sourceSnapshot.files)
+      : null;
+    const payload: DiagnosisResponse = { diagnosis, staleSources };
     return NextResponse.json(payload, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const { status, code, message } = toApiError(error);

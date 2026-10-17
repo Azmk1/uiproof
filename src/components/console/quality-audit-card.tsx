@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { LoaderCircle, Play, TriangleAlert } from "lucide-react";
 import { DiagnosisPanel } from "@/components/console/diagnosis-panel";
+import { RepairPanel } from "@/components/console/repair-panel";
 import { QualityPanel } from "@/components/console/quality-panel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -163,7 +164,10 @@ export function QualityAuditCard({
           <>
             <QualityPanel model={qualityModelFromReport(report)} />
             {report.verdict.status === "fail" ? (
-              <DiagnosisPanel reportId={null} auditId={report.id} scopeKey={scopeKey} sourceLabel={sourceLabel} />
+              <>
+                <DiagnosisPanel reportId={null} auditId={report.id} scopeKey={scopeKey} sourceLabel={sourceLabel} />
+                <RepairPanel reportId={null} auditId={report.id} scopeKey={scopeKey} sourceLabel={sourceLabel} />
+              </>
             ) : null}
           </>
         ) : isLoadingStored ? (

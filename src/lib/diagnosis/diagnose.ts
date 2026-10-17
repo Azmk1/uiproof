@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ComparisonError } from "@/lib/compare/errors";
 import { readReport } from "@/lib/compare/storage";
 import { readAudit } from "@/lib/quality/storage";
@@ -129,6 +130,20 @@ export async function runDiagnosis(input: DiagnoseInput): Promise<DiagnoseResult
     maxSourcesPerIssue: MAX_SOURCES_PER_ISSUE,
   });
 
+  // The exact bytes the model was shown, so a later read can tell whether a citation is
+  // still pointing at the same code. Reading reuses the workspace's guarded read.
+  const snapshot: Record<string, string> = {};
+  for (const relativePath of filesRead) {
+    const file = workspace.files.find((entry) => entry.relativePath === relativePath);
+    if (!file) continue;
+    try {
+      snapshot[relativePath] = createHash("sha256").update(await workspace.read(file)).digest("hex");
+    } catch {
+      // A file that could not be re-read is simply absent from the snapshot; the stale
+      // check will report it as missing rather than claiming it is current.
+    }
+  }
+
   const diagnosed: DiagnosedIssue[] = prompt.issues.map((issue) => ({
     key: issue.key,
     kind: issue.kind,
@@ -159,6 +174,7 @@ export async function runDiagnosis(input: DiagnoseInput): Promise<DiagnoseResult
     },
     issues: diagnosed,
     warnings: [...context.warnings, ...prompt.warnings, ...validation.warnings],
+    sourceSnapshot: { files: snapshot },
     aiGenerated: true,
   };
 

@@ -224,3 +224,75 @@ describe("buildProjectCaptureUrl", () => {
     expect(projectScopeKey("example-app", "home")).not.toBe(projectScopeKey("example", "app/home"));
   });
 });
+
+describe("parseProjectConfig repair block", () => {
+  const base = JSON.parse(VALID).projects[0];
+  const withRepair = (repair: unknown, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      projects: [
+        {
+          ...base,
+          sourceDir: ".",
+          ...extra,
+          repair,
+        },
+      ],
+    });
+  const sandbox = {
+    command: ["node", "server.mjs"],
+    url: "http://127.0.0.1:4199",
+    readyPath: "/healthz",
+    env: { NODE_ENV: "test" },
+  };
+
+  it("leaves repair null when the project did not register one", () => {
+    expect(parseOrThrow(VALID)[0].repair).toBeNull();
+    expect(parseOrThrow(VALID)[0].repair).toBeNull();
+  });
+
+  it("parses a full repair block", () => {
+    const project = parseOrThrow(
+      withRepair({
+        sandbox,
+        build: ["node", "build.mjs"],
+        test: ["node", "--test"],
+        allow: ["views/**"],
+        guardRoutes: ["checkout"],
+        entryFiles: ["views/index.html"],
+      }),
+    )[0];
+    expect(project.repair).toEqual({
+      sandbox: { command: ["node", "server.mjs"], url: "http://127.0.0.1:4199", readyPath: "/healthz", env: { NODE_ENV: "test" } },
+      build: ["node", "build.mjs"],
+      test: ["node", "--test"],
+      allow: ["views/**"],
+      guardRoutes: ["checkout"],
+      entryFiles: ["views/index.html"],
+    });
+  });
+
+  it("refuses a sandbox that is not shell-free, loopback and secret-free", () => {
+    const cases: Array<[unknown, RegExp]> = [
+      [{}, /sandbox must be an object/],
+      [{ sandbox: { ...sandbox, command: [] } }, /non-empty array/],
+      [{ sandbox: { ...sandbox, command: ["node", "a; rm -rf /"] } }, /shell metacharacter/],
+      [{ sandbox: { ...sandbox, command: ["node", "../outside.mjs"] } }, /parent-directory/],
+      [{ sandbox: { ...sandbox, url: "https://example.com" } }, /loopback/],
+      [{ sandbox: { ...sandbox, readyPath: "healthz" } }, /readyPath/],
+      [{ sandbox: { ...sandbox, env: { UIPROOF_AI_API_KEY: "x" } } }, /credential/],
+      [{ sandbox: { ...sandbox, env: { "bad key": "x" } } }, /variable name/],
+    ];
+    for (const [repair, error] of cases) {
+      expect(parseProjectConfig(withRepair(repair)).error, JSON.stringify(repair)).toMatch(error);
+    }
+  });
+
+  it("refuses guard routes and allow patterns that escape the project", () => {
+    expect(parseProjectConfig(withRepair({ sandbox, guardRoutes: ["nope"] })).error).toMatch(/route id/);
+    expect(parseProjectConfig(withRepair({ sandbox, allow: ["../src/**"] })).error).toMatch(/may not contain/);
+    expect(parseProjectConfig(withRepair({ sandbox, allow: [] })).error).toMatch(/non-empty array/);
+    expect(parseProjectConfig(withRepair({ sandbox, entryFiles: ["../secret.html"] })).error).toMatch(/relative POSIX path/);
+    expect(parseProjectConfig(withRepair({ sandbox, entryFiles: ["/etc/passwd"] })).error).toMatch(/relative POSIX path/);
+    expect(parseProjectConfig(withRepair({ sandbox, build: ["node", "x", "y", "z", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q"] })).error).toMatch(/limit is 20/);
+  });
+});

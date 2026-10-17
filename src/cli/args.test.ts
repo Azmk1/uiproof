@@ -189,3 +189,46 @@ describe("helpText", () => {
     expect(text).toMatch(/2\s+configuration/);
   });
 });
+
+describe("repair options", () => {
+  it("parses the repair command and its bounds", () => {
+    const parsed = parseArgs([
+      "repair",
+      "--audit",
+      "audit-51117643",
+      "--max-attempts",
+      "1",
+      "--out",
+      "./fix.patch",
+      "--keep-sandbox",
+      "--json",
+      "--source",
+      "../my-app",
+    ]);
+    expect(parsed).toMatchObject({
+      command: "repair",
+      audit: "audit-51117643",
+      maxAttempts: 1,
+      out: "./fix.patch",
+      keepSandbox: true,
+      json: true,
+      source: "../my-app",
+      maxIssues: null,
+    });
+  });
+
+  it("refuses an attempt count the engine will not run", () => {
+    expect(() => parseArgs(["repair", "--max-attempts", "3"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["repair", "--max-attempts", "0"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["repair", "--max-attempts", "1.5"])).toThrow(CliUsageError);
+  });
+
+  it("documents the repair command and its exit codes", () => {
+    const help = helpText("0.1.0");
+    expect(help).toContain("uiproof repair");
+    expect(help).toContain("--max-attempts");
+    expect(help).toContain("or no repair");
+    expect(help).toContain("patch could be verified");
+    expect(help).toContain("--keep-sandbox");
+  });
+});
