@@ -912,6 +912,8 @@ repair quality is therefore unmeasured here.
 
 [examples/repair-app](examples/repair-app) is a runnable fixture with all four defects and the build
 and test commands above; its README shows the two commands that audit it and repair it by hand.
+[docs/PHASE8-REPORT.md](docs/PHASE8-REPORT.md) records the measured before/after values, the rejected
+attempts, the commit SHA, the test counts and the security assumptions behind the feature.
 
 ### Portable approved baselines
 
