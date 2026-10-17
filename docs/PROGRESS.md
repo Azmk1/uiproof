@@ -653,6 +653,51 @@ capable of breaking the product as a source change, and the existing tests were 
 
 ---
 
+## Phase 7 — evidence-grounded AI diagnosis
+
+**Goal:** let a developer point UIProof at a stored failure and get a useful, evidence-grounded
+explanation of what likely caused it — without the AI change any code, invent a source reference, or
+touch a verdict.
+
+### Acceptance criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | **Structured diagnostic context; measured facts clearly separated from hypotheses** | **Verified** | `src/lib/diagnosis/context.ts` builds issues from a stored report only: rule/impact/WCAG tags/selector/markup, changed pixels/tolerance/viewport (and diff/current/baseline URLs), measured overflow in px. Needs-review results are excluded with a warning; a  passing or capture-only run is refused. 12 tests in `context.test.ts` assert the fact list verbatim, the viewport dedupe, and that a clean viewport is never offered as an issue |
+| 2 | **Safe, read-only source investigation with verified paths and lines** | **Verified** | `workspace.ts` (no write path at all, canonical-root re-check on every read, dot-files/secrets/dependencies/build output skipped by rule, depth/count/size caps) and `candidates.ts` (route/selector/markup/text ranking with the reason recorded). `workspace.test.ts` covers a real temp tree, a junction escape and an unlisted path; `candidates.test.ts` asserts every reported line contains the match in the real file |
+| 3 | **Provider-agnostic OpenAI-compatible model, optional, bounded** | **Verified** | `client.ts`: `POST {base}/chat/completions`, configurable key/base URL/model through `UIPROOF_AI_*` (or `OPENAI_*`), timeout 2–180 s, token cap, 200k response cap, one retry on `429`/`5xx`, one retry without JSON mode. Without a key nothing is called and every existing gate behaves exactly as before. 16 client tests cover configuration, retries, refusals, timeout and unreachable endpoints |
+| 4 | **Structured, validated diagnosis with honest uncertainty** | **Verified** | `schema.ts` refuses missing fields, unknown keys, bad confidence, prose and oversized text; verifies every cited path against the files sent for that issue and every line against the excerpt actually shown, keeping failures as `unverifiedSources` with a reason. `diagnose.test.ts` covers a valid answer, a fenced answer, a fabricated file, an out-of-excerpt line, a skipped issue and a malformed answer |
+| 5 | **CLI `uiproof diagnose` and a dashboard panel, separate from verdicts** | **Verified** | `src/cli/main.ts` `runDiagnose` (exit 0 diagnosed, 2 otherwise, never 1); `diagnosis-panel.tsx` wired into the run view and the audit card with measured facts first, `model-generated` + confidence + uncertainty, verified vs unverified citations and evidence links; three HTTP routes. A diagnosis file has no status/verdict field and lives under `diagnoses/`, which no gate reads |
+| 6 | **Known-defect cases from the pilot, with deterministic fixtures** | **Verified** | `e2e/diagnosis.test.ts` runs the real support page with the pilot's defects (missing accessible name, contrast, mobile overflow), audits it with Chromium + axe, and diagnoses the stored audit through the CLI against a local OpenAI-compatible stub. The stub cites only the excerpt UIProof sent; the test asserts the cited `views/quality.html` line really contains `support-email`. Unit tests cover missing model, malformed answer, invented key, 5xx, missing/absent source and an escape attempt |
+| 7 | **No source modification, no patches, no PRs, no hosted service, no auth, no rewrite** | **Verified** | The workspace module has no write API; `diagnose.test.ts` asserts the source tree is byte-identical in file listing after a run, and the audit JSON is unchanged after both success and failure. No existing test, workflow or baseline was changed |
+| 8 | **Everything verified and documented; commit and push** | **Verified** | lint · typecheck · 334 unit tests / 26 files · production build · 71 browser tests / 9 files; README gains a configuration + limitations section. Live model call: **not performed** (no credentials in the environment) — reported separately, not implied |
+
+### Milestone log
+
+| Milestone | Outcome |
+|-----------|---------|
+| M47 — diagnostic context | `context.ts` + `types.ts` + report fixtures reused by every later test; 12 context tests |
+| M48 — source investigation | `workspace.ts`, `candidates.ts`; safety rules by construction (no write path, canonical root, skip lists, caps); 22 tests across `workspace.test.ts` (9) and `candidates.test.ts` (13), built on a real temporary tree. Three ranking rules came out of evidence rather than guesses: a file containing the reported selector now outranks the route's own page (a test showed the opposite), a comment that names a selector is no longer treated as the match (a live run cited the example app's own explanatory comment), and a template that can render markup outranks a stylesheet that merely mentions its class |
+| M49 — model integration | `client.ts` with an `EnvLike` seam so tests never touch `process.env`; 16 client tests |
+| M50 — schema and verification | `schema.ts`; 16 validation tests including fabricated citations and out-of-excerpt lines |
+| M51 — pipeline | `prompt.ts` (bounded, deterministic assembly) and `diagnose.ts` (load report → measure → select → ask → validate → persist); 22 pipeline tests against real stores |
+| M52 — CLI and HTTP | `diagnose` command with exit-code discipline; `/api/diagnoses` (GET history + availability, POST diagnose, GET one); config `sourceDir` with relative resolution; 6 parser tests |
+| M53 — dashboard | `diagnosis-panel.tsx` in the run view and the audit card; no verdict rendered anywhere in it |
+| M54 — end to end | `e2e/diagnosis.test.ts`: 5 CLI tests against the real example app + a local stub model, 4 API tests for the dashboard endpoints |
+| M55 — documentation | README section (configuration, what is sent, what is verified, limitations), configuration table, API table, PROGRESS record |
+
+### Evidence
+
+| Check | Result |
+|-------|--------|
+| Unit suite | **334 passed**, 1 skipped (a file symlink that Windows without Developer Mode cannot create; the directory-junction escape test runs and passes). Diagnosis area: 88 tests across 6 files |
+| Browser suite | **71 passed** / 9 files, including 5 real `uiproof diagnose` runs and 4 diagnosis-API checks |
+| Source-location accuracy (a real session, not the test stub's fixtures) | Defective support view audited (exit 1, four failures), then diagnosed: 11 files listed, 5 read, 21,438 prompt characters, 23 ms, exit 0, **0 unverified citations**. The contrast issue cited `views/quality.changed.html:52` (the 2.81:1 note) and the missing-name issue cited `views/quality.changed.html:60` (`<input id="support-email" …>`), both verified against the line UIProof read |
+| Safe boundaries | No source write API; source tree unchanged after a run; unlisted path refused; junction to an outside directory skipped; secrets/`.env`/`node_modules`/build output never listed |
+| Live model | **Not run.** `UIPROOF_AI_API_KEY` and `OPENAI_API_KEY` are unset here, so no genuine provider call was made; the pipeline was exercised through the real HTTP interface against a local OpenAI-compatible stub instead |
+
+---
+
 ## Decisions made during implementation
 
 - **Route groups** `(console)` / `(fixtures)` keep console chrome off the screens under test.
@@ -725,6 +770,21 @@ capable of breaking the product as a source change, and the existing tests were 
   is not screenshot-diffed.
 - The environment used for verification cannot composite browser frames reliably, so UI verification
   measures the rendered DOM and decodes rendered pixels rather than reviewing whole-page screenshots.
+- **AI diagnosis is optional and heuristic.** Source selection ranks files by route shape, selector,
+  markup and visible text; it can miss the file that actually causes a defect and can offer a
+  plausible one that does not. The prompt records why each file was chosen and which lines matched,
+  and the absence of a candidate is reported rather than filled in — but it is a hypothesis.
+- **The model sees excerpts, not the repository, and can be wrong.** The schema check and citation
+  verification prove the answer has the right shape and that its paths/lines are the ones UIProof
+  showed; they cannot prove the explanation is true. Confidence and uncertainty are the model's own.
+- **A diagnosis needs a registered `sourceDir`.** Without one the command exits `2` with instructions;
+  there is no monorepo-aware multi-root investigation, and line numbers are as read at diagnosis time
+  (a later edit can move them).
+- **One request per diagnosis.** Up to 8 issues, 4 candidate files each, 30-line excerpts and a
+  24,000-character prompt; there is no multi-turn investigation, no repository-wide search and no
+  tool use. Oversized material is dropped with a warning rather than silently truncated.
+- **No live provider call was made during verification.** The deterministic stub exercises the real
+  HTTP interface; a genuine OpenAI-compatible call still depends on the operator's credentials.
 
 ## Blockers
 
@@ -747,10 +807,18 @@ pilot's four product defects are fixed and covered by tests; its findings are re
 seven trust-boundary weaknesses a guest CI setup still has and the fact that the pilot's own workflow
 has never run on a hosted runner.
 
-The recommended next milestone remains the sharpening work the pilot's friction list points at:
-**Phase 7 — make the gate sharper, and cheaper to run everywhere**: ignore regions recorded in the
-report, a git SHA per run, `uiproof check --all` across a whole project, the CLI published to a
-registry (the pilot took it as far as an installable tarball), and multi-viewport approvals. Two smaller items belong with it: an automated check that the manual branch
-protection settings in `docs/BASELINE-UPDATES.md` are actually configured, and a scheduled
-regeneration probe that fails when a new image digest changes rendering rather than letting it surface
-as a mystery regression. Details at the end of the README.
+Phase 7 is delivered: a stored failure can now be handed to an optional, OpenAI-compatible model
+that explains it from UIProof's own measurements and from excerpts of the registered application
+source, with every citation verified against the line UIProof read and no verdict touched. It is
+covered by deterministic unit tests and a real end-to-end run of the pilot's defects; no live model
+provider was called because no credentials were configured here, and that is reported rather than
+implied.
+
+The sharpening work from the pilot's friction list is still the next milestone: ignore regions
+recorded in the report, a git SHA per run (which would also make a diagnosis name the change it
+explains), `uiproof check --all` across a whole project, the CLI published to a registry (the pilot
+took it as far as an installable tarball), and multi-viewport approvals. Two smaller items belong
+with it: an automated check that the manual branch protection settings in `docs/BASELINE-UPDATES.md`
+are actually configured, and a scheduled regeneration probe that fails when a new image digest
+changes rendering rather than letting it surface as a mystery regression. Details at the end of the
+README.

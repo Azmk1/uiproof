@@ -46,6 +46,13 @@ export interface RegisteredProject {
   readonly defaultMode: ComparisonMode;
   /** Extra origins the browser may load from while capturing. Empty by default. */
   readonly allowedOrigins: readonly string[];
+  /**
+   * Optional, explicitly registered application source directory (Phase 7). Where it is
+   * absent, the AI diagnosis refuses to investigate anything: UIProof never guesses at a
+   * workspace, and never reads a directory the developer did not name. Relative paths are
+   * resolved against the registration file's own directory.
+   */
+  readonly sourceDir?: string | null;
 }
 
 /** Result of reading the local project configuration file. */

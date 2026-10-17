@@ -76,3 +76,19 @@ export async function loadProjectCatalog(cwd?: string): Promise<ProjectCatalog> 
 export function resetProjectCatalogCache(): void {
   cache = null;
 }
+
+/**
+ * Absolute path of a project's registered source directory (Phase 7), or `null` when the
+ * project did not register one. Relative paths are resolved against the registration
+ * file's own directory, so a repository can commit a portable registration.
+ */
+export function resolveRegisteredSourceDir(
+  project: { readonly sourceDir?: string | null },
+  configPath: string | null,
+  cwd: string = process.cwd(),
+): string | null {
+  const raw = project.sourceDir ?? null;
+  if (raw === null || raw.trim().length === 0) return null;
+  const base = configPath ? path.dirname(configPath) : cwd;
+  return path.resolve(base, raw.trim());
+}

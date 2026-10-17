@@ -154,6 +154,8 @@ export interface ProjectRegistration {
   readonly origin: string;
   readonly routes: readonly ExampleAppRoute[];
   readonly allowedOrigins?: readonly string[];
+  /** Phase 7: the application source the optional diagnosis may read. */
+  readonly sourceDir?: string;
 }
 
 /** Writes a UIProof registration file — the same shape a developer would hand-write. */

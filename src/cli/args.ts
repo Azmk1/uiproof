@@ -9,7 +9,15 @@
 
 export const CLI_NAME = "uiproof";
 
-export type CliCommand = "capture" | "check" | "audit" | "projects" | "baselines" | "help" | "version";
+export type CliCommand =
+  | "capture"
+  | "check"
+  | "audit"
+  | "diagnose"
+  | "projects"
+  | "baselines"
+  | "help"
+  | "version";
 export type BaselinesSubcommand = "status" | "export" | "import";
 
 /** Impact bands a quality policy can fail on, in ascending order. */
@@ -58,6 +66,14 @@ export interface ParsedArgs {
   readonly maxDocumentOverflow: number | null;
   /** Maximum per-element viewport escape, in pixels (audit). */
   readonly maxElementOverflow: number | null;
+  /** Stored comparison run to explain (diagnose). */
+  readonly report: string | null;
+  /** Stored audit to explain (diagnose). */
+  readonly audit: string | null;
+  /** Application source directory to investigate (diagnose; overrides the registration). */
+  readonly source: string | null;
+  /** Maximum issues to include in one diagnosis. */
+  readonly maxIssues: number | null;
 }
 
 const BOOLEAN_FLAGS: Record<string, keyof ParsedArgs> = {
@@ -86,9 +102,22 @@ const VALUE_FLAGS: Record<string, keyof ParsedArgs> = {
   "--fail-on": "failOn",
   "--max-document-overflow": "maxDocumentOverflow",
   "--max-element-overflow": "maxElementOverflow",
+  "--report": "report",
+  "--audit": "audit",
+  "--source": "source",
+  "--max-issues": "maxIssues",
 };
 
-const COMMANDS = new Set<CliCommand>(["capture", "check", "audit", "projects", "baselines", "help", "version"]);
+const COMMANDS = new Set<CliCommand>([
+  "capture",
+  "check",
+  "audit",
+  "diagnose",
+  "projects",
+  "baselines",
+  "help",
+  "version",
+]);
 const SUBCOMMANDS = new Set<BaselinesSubcommand>(["status", "export", "import"]);
 
 function parseTolerance(raw: string): number {
@@ -103,6 +132,14 @@ function parsePixels(raw: string, token: string): number {
   const value = Number.parseFloat(raw);
   if (!Number.isFinite(value) || value < 0) {
     throw new CliUsageError(`${token} must be a number of pixels, zero or more, got ${JSON.stringify(raw)}.`);
+  }
+  return value;
+}
+
+function parseCount(raw: string, token: string, min: number, max: number): number {
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value < min || value > max || String(value) !== raw.trim()) {
+    throw new CliUsageError(`${token} must be a whole number between ${min} and ${max}, got ${JSON.stringify(raw)}.`);
   }
   return value;
 }
@@ -145,6 +182,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     wcagOnly: false,
     maxDocumentOverflow: null,
     maxElementOverflow: null,
+    report: null,
+    audit: null,
+    source: null,
+    maxIssues: null,
   };
 
   const positionals: string[] = [];
@@ -176,6 +217,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         values.failOn = parseFailOn(raw);
       } else if (valueKey === "maxDocumentOverflow" || valueKey === "maxElementOverflow") {
         values[valueKey] = parsePixels(raw, token);
+      } else if (valueKey === "maxIssues") {
+        values.maxIssues = parseCount(raw, token, 1, 8);
       } else {
         if (raw.trim().length === 0) throw new CliUsageError(`${token} needs a non-empty value.`);
         (values as Record<string, unknown>)[valueKey] = raw;
@@ -224,6 +267,7 @@ Commands
   capture              Capture a route of a registered project and store the screenshot
   check                Capture it and compare it with its approved baseline
   audit                Measure accessibility and responsive layout, and judge them by policy
+  diagnose             Explain a stored report with an optional AI model
   projects             List the projects and routes in the registration file
   baselines [status]   Show approved baselines, their versions and their images
   baselines export     Write a portable baseline bundle
@@ -251,6 +295,15 @@ Quality (audit; every threshold is a number you can disagree with)
   --max-element-overflow <px>    Viewport escape allowed per element (default: 1)
   audit measures every viewport preset (desktop, tablet, mobile) unless --viewport narrows it
 
+Diagnosis (optional; needs UIPROOF_AI_API_KEY and a source directory)
+  --report <run id>    Stored comparison run to explain
+  --audit <audit id>   Stored audit to explain
+  --source <dir>       Application source directory to investigate (overrides the registration)
+  --max-issues <n>     How many measured issues to diagnose (1–8, default 4)
+                       The model is chosen with UIPROOF_AI_MODEL, the endpoint with
+                       UIPROOF_AI_BASE_URL (any OpenAI-compatible /chat/completions).
+                       Without a key the command exits 2 and changes nothing.
+
 Baselines
   --approve            Approve this capture as a new baseline version (capture only)
   --note <text>        Note stored on the approved version
@@ -266,9 +319,13 @@ Output
   --version, -v        Show the version
 
 Exit codes
-  0  the comparison passed (or the capture was stored — a capture is never reported as a pass)
+  0  the comparison passed (or the capture was stored — a capture is never reported as a pass),
+     or a diagnosis was produced and stored
   1  a visual regression was detected, or the quality policy failed (audit)
   2  configuration, baseline, browser or infrastructure error
+
+  diagnose never returns 1: a diagnosis is an explanation, not a verdict, and it can never
+  turn a failing gate into a passing one.
 
   audit never touches the approved baseline: a failing quality policy exits 1 and leaves
   every approved screenshot exactly as it was.
@@ -281,5 +338,7 @@ Examples
   ${CLI_NAME} audit --project my-app --route home --viewport mobile --json
   ${CLI_NAME} baselines export --project my-app --route home --out ./uiproof-baselines
   ${CLI_NAME} baselines import --from ./uiproof-baselines --activate
+  ${CLI_NAME} diagnose --report run-e62644f5 --source ../my-app --json
+  ${CLI_NAME} diagnose --audit audit-51117643
 `;
 }

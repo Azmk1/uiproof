@@ -4,6 +4,7 @@
       "id": "example-app",
       "name": "Example app",
       "origin": "http://127.0.0.1:4173",
+      "sourceDir": "example-app",
       "routes": [
         { "id": "home", "name": "Overview", "path": "/" },
         { "id": "settings", "name": "Settings", "path": "/settings" },

@@ -71,6 +71,14 @@ proposals — none of that is wired up yet.
   renders findings grouped by impact, layout results per viewport and a link to the screenshot each
   measurement was taken from. Audits are stored like runs — a structured report plus one screenshot
   per viewport — and the newest one for the source is restored on reload.
+- **An optional, evidence-grounded AI diagnosis.** `uiproof diagnose` — and the console's *AI
+  diagnosis* panel — asks an OpenAI-compatible model to explain a stored failure, but only after
+  UIProof has assembled the measured facts, the evidence links and numbered excerpts of the
+  application files that match the failed route and element. The answer is validated against a
+  strict schema, every citation is checked against the line UIProof actually read (a citation it
+  could not verify is kept and labelled, never deleted), and the result is stored apart from the
+  report: a diagnosis carries no verdict and can never turn a failing gate into a pass. Without a
+  key the feature is simply absent and every visual and quality gate works unchanged.
 - **A CI gate that can actually fail.** [.github/workflows/visual-regression.yml](.github/workflows/visual-regression.yml)
   compares a pull request's code against the approved bundle committed on its base branch, inside the
   pinned rendering image, and lets the comparison's own exit code fail the job. It never captures and
@@ -186,6 +194,7 @@ Create `uiproof.config.json` in the repository root (see
       "id": "my-app",
       "name": "My app",
       "origin": "http://127.0.0.1:5173",
+      "sourceDir": ".",
       "routes": [
         { "id": "home", "name": "Home", "path": "/" },
         { "id": "settings", "name": "Settings", "path": "/settings" }
@@ -202,6 +211,7 @@ Create `uiproof.config.json` in the repository root (see
 | `name` | How the project is labelled in the console (1–60 characters). |
 | `origin` | `http(s)://` on a **loopback** host with **no** path, query, credentials or fragment — `http://127.0.0.1:5173`, not `https://staging.example.com`. |
 | `routes` | A non-empty allow-list. Each entry needs an `id`, a `name` and a `path` that starts with `/` and contains no traversal (literal or percent-encoded), query, fragment, backslash or whitespace. |
+| `sourceDir` | Optional, and only used by `uiproof diagnose`: the application source the optional AI diagnosis may read. Relative paths resolve against this file's own directory, so the registration stays portable. Nothing else — capture, comparison, baselines, audits — reads it. |
 | `allowedOrigins` | Optional. Extra origins the *page* may load resources from while being captured. Empty by default, so a capture is hermetic unless you widen it on purpose. Any `http(s)` origin; wildcards are refused. |
 
 A malformed entry fails the whole file with a message naming the entry, and the console says so — half
@@ -403,6 +413,9 @@ the engine never renders.
 | `GET`  | `/api/baselines/projects/:project/:route/:viewport` | The same for a registered project route                                 |
 | `POST` | `/api/baselines/projects/:project/:route/:viewport/activate` | Replace / restore a project route's reference                  |
 | `GET`  | `/api/baselines/projects/:project/:route/:viewport/:version.png` | An approved project baseline image                  |
+| `GET`  | `/api/diagnoses?scopeKey=<scope>&limit=n`        | Diagnosis history for one scope, plus whether a model is configured |
+| `POST` | `/api/diagnoses`                                 | **Diagnose** one stored run or audit (`{ reportId }` or `{ auditId }`, optional `maxIssues`) |
+| `GET`  | `/api/diagnoses/:id`                             | One stored diagnosis (read-only; there is no update or delete)            |
 
 `POST /api/compare` and `POST /api/baselines` accept one of two bodies. Phase 3 spelling, which is
 what the console sends:
@@ -421,8 +434,10 @@ unsafe path, `403` cross-site request or non-local write, `404` unknown run or u
 version, `502` capture failure (including a refused redirect and an unreachable app), `503` Chromium
 unavailable, `500` an unusable registration file.
 
-All three state-changing writes (`POST`) are **local-only**: they require a loopback host, no
-cross-site `Sec-Fetch-Site`, and an `Origin` that matches `Host`. Reads are unrestricted.
+All four state-changing writes (`POST`) are **local-only**: they require a loopback host, no
+cross-site `Sec-Fetch-Site`, and an `Origin` that matches `Host`. Reads are unrestricted. A
+diagnosis request never names a source directory: the server resolves the one the project
+registered, so a page cannot point the investigator at another path on the machine.
 
 Example without the UI:
 
@@ -561,6 +576,7 @@ writers, and the portable-bundle module.
 | `uiproof capture --project <id> --route <id>` | Captures the route and stores the screenshot |
 | `uiproof check --project <id> --route <id>` | Captures the route and diffs it against its approved baseline |
 | `uiproof audit --project <id> --route <id>` | Measures accessibility and layout and judges them by policy |
+| `uiproof diagnose --report <run id> \| --audit <audit id>` | Explains a stored failure with the configured model (optional) |
 | `uiproof projects` | Lists the projects and routes in the registration file |
 | `uiproof baselines [status]` | Shows the approved baselines, their versions and which one is active |
 | `uiproof baselines export (--project <id> \| --all) --out <dir>` | Writes a portable baseline bundle |
@@ -569,7 +585,8 @@ writers, and the portable-bundle module.
 
 Options: `--project`, `--route`, `--viewport desktop|tablet|mobile`, `--config <file>`,
 `--storage <dir>`, `--tolerance <pct>`, `--quality`, `--fail-on <impact>`, `--new-only`, `--wcag-only`,
-`--max-document-overflow <px>`, `--max-element-overflow <px>`, `--approve`, `--note <text>`, `--out`,
+`--max-document-overflow <px>`, `--max-element-overflow <px>`, `--report <run id>`,
+`--audit <audit id>`, `--source <dir>`, `--max-issues <n>`, `--approve`, `--note <text>`, `--out`,
 `--from`, `--activate`, `--all`, `--json`, `--quiet`. `pnpm uiproof --help` is the full text;
 `pnpm build:cli` refreshes the bundle without running a command.
 
@@ -672,6 +689,72 @@ makes the same finding fail as *new* at tablet. Either approve all three
 (`capture --approve --quality --viewport <id>` per viewport) or narrow the audit with `--viewport`.
 The [independent pilot](docs/PILOT.md) walked into this once, and `capture --approve` without
 `--quality` leaves no snapshot at all — `--new-only` then has no reference and counts every finding.
+
+### AI diagnosis (optional)
+
+The tool that finds a regression cannot tell you *why* it happened. `uiproof diagnose` adds that,
+as an **optional, clearly-labelled explanation**: it sends a model the measurements UIProof already
+made plus excerpts of the application files that plausibly produced the failing element, and stores
+the model's answer next to — never inside — the report it explains.
+
+```bash
+# Enable it once. Any OpenAI-compatible endpoint works: OpenAI, a gateway, vLLM, Ollama, LM Studio.
+export UIPROOF_AI_API_KEY=...
+export UIPROOF_AI_MODEL=gpt-4o-mini           # default
+export UIPROOF_AI_BASE_URL=https://api.openai.com/v1   # default; /chat/completions is appended
+
+# Register where the application's code lives (relative paths resolve from the config file):
+#   { "id": "my-app", "origin": "http://127.0.0.1:4310", "sourceDir": "../my-app", "routes": [ … ] }
+
+pnpm uiproof diagnose --report run-e62644f5 --json
+pnpm uiproof diagnose --audit audit-51117643 --source ../my-app
+```
+
+What happens, in order, and what is *not* invented along the way:
+
+1. **The report is read, not re-measured.** Failures become issues with the report's own facts:
+   the axe rule, impact, WCAG tags, selector and markup; or the changed-pixel count, tolerance and
+   viewport; or the measured overflow in pixels. A run that passed, or a capture, is refused with
+   `diagnosis_nothing_to_diagnose` — "nothing was measured, so here is a story about your code" is
+   the failure mode this exists to avoid. `needs-review` results stay questions rather than defects.
+2. **Source files are selected, not guessed.** The registered directory is walked read-only; hidden
+   files (which covers `.env` and friends), `node_modules`, build output, lockfiles, logs, keys and
+   binaries are skipped and counted by reason. Candidate files are ranked by evidence a browser can
+   see — the route's own page, the selector and markup axe reported, the literal text on the page —
+   and every candidate records *why* it was chosen and which lines matched. A file that matches
+   nothing is not offered, and a path that is not inside the registered directory is never read.
+3. **One bounded request.** Numbered excerpts (30 lines per file, 4 files per issue, 24,000 prompt
+   characters) go to `/chat/completions` with a strict answer schema. Timeouts, a token cap, a
+   response-size cap and one retry on `429`/`5xx` are built in; an endpoint that rejects JSON mode
+   is retried once without it. The key never appears in a prompt, a stored diagnosis, a log line or
+   an error message.
+4. **The answer is validated, then its citations are verified.** A missing field, an unknown issue
+   key, a bad confidence or prose around the JSON refuses the whole response (and stores nothing).
+   A cited path is accepted only if UIProof sent that file for that issue, and a cited line only if
+   it was inside the excerpt shown; `lineText` is the line as UIProof read it. Anything else is kept
+   as an **unverified citation**, with the reason, and is visible in the console.
+5. **The result is stored apart.** `<store>/diagnoses/<diag id>/diagnosis.json`, marked
+   `aiGenerated: true`, with the measured facts untouched, the model and endpoint host (never the
+   key), prompt size and latency. Nothing in the verdict path reads that directory: deleting every
+   diagnosis would not change a single pass or fail.
+
+Exit codes keep the same meaning: `0` means a diagnosis was produced and stored, `2` means it could
+not be (no key, no registered source directory, a rejected request, an unusable answer). `diagnose`
+**never returns `1`** — it has no verdict to report, and a model that is unavailable can never make
+a failing audit look like a pass.
+
+In the console, a failing run or audit shows an *AI diagnosis* panel: measured facts first, then the
+model's answer behind a `model-generated` badge with its confidence and its own uncertainty, its
+citations split into *verified by UIProof* and *could not verify*, and links to the screenshots and
+diff image the issue came from. A machine without a key shows the configuration instructions instead
+of a button that cannot work.
+
+**Limitations, stated plainly.** File selection is a heuristic (route shape, selector, markup and
+visible text), so it can miss the file that actually causes a defect, and it can offer a plausible
+one that does not; the prompt says which lines matched, and the absence of a candidate is reported as
+a warning rather than filled in. The model sees excerpts, not the repository, and can be wrong — its
+answer is a hypothesis with a confidence, never a measurement. Nothing is written to the source tree,
+no patch is produced, and no pull request is opened.
 
 ### Portable approved baselines
 
@@ -828,6 +911,12 @@ a page with live data still moves pixels, so a changed digest means "regenerate 
 | `UIPROOF_BASE_URL`  | the incoming request's origin | Origin used to reach the fixtures while capturing        |
 | `UIPROOF_PROJECTS_FILE` | `<project>/uiproof.config.json` | The project registration file                       |
 | `UIPROOF_ALLOW_REMOTE_BASELINES` | unset | `1` relaxes the loopback check on approvals — only behind your own access control |
+| `UIPROOF_AI_API_KEY` | unset | Enables the optional AI diagnosis. `OPENAI_API_KEY` is used as a fallback |
+| `UIPROOF_AI_BASE_URL` | `https://api.openai.com/v1` | Any OpenAI-compatible endpoint (`…/v1`); `/chat/completions` is appended |
+| `UIPROOF_AI_MODEL` | `gpt-4o-mini` | The model name sent to that endpoint (`OPENAI_MODEL` as a fallback) |
+| `UIPROOF_AI_TIMEOUT_MS` | `60000` | Per-request timeout, clamped to 2–180 s |
+| `UIPROOF_AI_MAX_TOKENS` | `1200` | Completion token cap, clamped to 128–8000 |
+| `UIPROOF_AI_MAX_ISSUES` | `4` | Issues sent in one diagnosis, clamped to 1–8 |
 
 ---
 
@@ -859,9 +948,10 @@ typecheck, unit tests, production build, Chromium install, browser suite.
 
 ## Testing
 
-`pnpm test` runs **238 unit tests** across 19 files, all covering the engine, the guards, the baseline
-store, the portable bundles, the quality measurements, the CLI's parser and the pinned CI environment
-rather than the UI shell:
+`pnpm test` runs **334 unit tests** across 26 files, all covering the engine, the guards, the baseline
+store, the portable bundles, the quality measurements, the optional diagnosis, the CLI's parser and
+the pinned CI environment rather than the UI shell (one test skips itself on a Windows host without
+symlink privilege; the junction-escape case runs everywhere):
 
 | File                            | Coverage                                                                                               |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -884,6 +974,12 @@ rather than the UI shell:
 | `lib/quality/fingerprint.test.ts` | The stable identity behind "new findings": `rule@selector`, identical across rescans and insensitive to whitespace reflow, with distinct rules or elements never collapsing into one; violation sets deduplicate and sort, and the diff of two snapshots separates added, known and resolved regardless of order. Also the snapshot parser behind every imported approval: accepted unchanged, refused when it carries unknown fields, a blank scanner version, an unparseable approval time, a non-array or unsorted or duplicated fingerprint list, a fingerprint that is not `<rule>@<selector>`, or a count that disagrees with the list — and the complete-index reader falls back to the display list only for reports written before the index existed |
 | `lib/quality/policy.test.ts`    | The policy's arithmetic: each `--fail-on` band fails on exactly its impact and above (an unstated impact fails rather than being presumed harmless), `none` reports everything and fails nothing, best-practice rules leave the verdict when excluded, `--new-only` counts only findings absent from the reference and falls back to counting everything with a note when there is no trustworthy one, document overflow fails above its pixel limit, and the description names every threshold. Phase 5.1 additions: the verdict reads the complete violation index rather than the capped display list (a serious finding only present in the index still fails, and the truncation is noted), responsive defects are read the same way, a desktop approval counts a fingerprint as new when the mobile reference lacks it, and new/known/resolved are classified per viewport under partial baseline coverage |
 | `lib/quality/presentation.test.ts` | The dashboard's view of an audit, kept pure: violations grouped by impact with empty bands omitted and unstated impact last, one finding seen at several viewports deduplicated with the viewports recorded, needs-review results kept apart from violations whatever their impact says, and both panel models carrying measurements, evidence and engine facts through unchanged |
+| `lib/diagnosis/context.test.ts` | The boundary between measurement and interpretation: issues built only from a stored report's own facts, needs-review results excluded with a count, one fingerprint measured at several viewports deduplicated, deliberate scrollers never offered as defects, a clean viewport never offered as an issue, and a passing or capture-only run refused instead of explained |
+| `lib/diagnosis/workspace.test.ts` | The only code that reads application source, against a real temporary tree: forward-slashed listing, dependencies/build output/hidden files/credentials/binaries/extension-less files skipped by reason, an oversized file skipped rather than truncated, a relative root resolved against the caller, a missing directory or a file refused, a file symlink and a directory junction outside the root never followed, and an unlisted path refused at read time |
+| `lib/diagnosis/candidates.test.ts` | Source selection, grounded in strings the page produced: tokens from the selector, the markup's own attributes and the visible phrase with generic element names dropped, the course of a route, a component that contains the reported selector ranked above the route's page, a template ranked above a stylesheet that merely mentions its class, a comment that names the selector never treated as the match, line numbers that match the real file, the file and excerpt caps honoured, and nothing at all returned when nothing matches |
+| `lib/diagnosis/schema.test.ts` | The model's answer treated as hostile input: a valid answer accepted with its cited line verified against the excerpt, a fenced answer accepted, a fabricated file or an out-of-excerpt line kept as an unverified citation with the reason, an invented or repeated issue key refused, a missing field, a bad confidence or an over-long string refused, prose around the JSON refused, a skipped issue reported as a gap, and extra issues ignored with a warning |
+| `lib/diagnosis/client.test.ts` | The OpenAI-compatible client with a scripted `fetch`: configuration from `UIPROOF_AI_*`/`OPENAI_*` without a key, defaults, clamping, base URLs with credentials or a query refused, availability described without the key, the request shape (endpoint, bearer header, temperature 0, JSON mode), a retry without `response_format`, a retry on `429`, rejected credentials naming neither the key nor a stack, a wrong base URL, a non-JSON body, an oversized response, a timeout and an unreachable endpoint |
+| `lib/diagnosis/diagnose.test.ts` | The whole pipeline against the real report/audit stores and a real temporary source tree, with only the network faked: measured facts preserved, the cited line verified against the file, persistence under `diagnoses/`, the key never stored, prompt assembly, an issue the model skipped left `null`, the issue cap, a visual regression explained from a run, `--source` overriding the registration, unavailable model / unregistered or missing source / passing run / unknown or ambiguous id / malformed answer / invented key / repeated 5xx all refused with nothing stored, the source tree untouched, and a stored diagnosis carrying no status or verdict |
 
 `diff.test.ts` is the important one: it builds synthetic PNGs in memory and asserts **exact** pixel
 counts (e.g. a 10 × 10 block changed on a 100 × 100 white canvas is exactly 100 pixels and 1 %).
@@ -895,7 +991,7 @@ would look, and asserts that every one of them is refused.
 
 ### Browser suite
 
-`pnpm test:e2e` runs **62 tests** across 8 files in real Chromium, against a real `next start` server
+`pnpm test:e2e` runs **71 tests** across 9 files in real Chromium, against a real `next start` server
 on a throwaway data directory ([e2e/](e2e)):
 
 | File | Coverage |
@@ -908,6 +1004,7 @@ on a throwaway data directory ([e2e/](e2e)):
 | `quality.test.ts` | The quality gate's seven demonstration points through the real CLI: a clean page passing at every viewport with the deliberate scroller recorded as evidence, a missing and an incorrect accessible name detected with structured evidence, a contrast failure reported with its measured ratio while an undecidable one stays a question, mobile-only overflow detected, restore naming what it resolved, screenshot baselines untouched by failing audits, and the documented exit code for each policy |
 | `quality-hardening.test.ts` | The three ways a quality gate can silently pass, each measured on the live page: 68 findings against a 60-finding display cap where the only serious violation sorts *past* the cap (the truncated list contains nothing severe, the verdict fails on it anyway and the note says all 68 were evaluated); a desktop-only approval that leaves the same fingerprints new at mobile and tablet while the desktop-only `--new-only` audit passes; those snapshots surviving export → wiped store → import with an identical classification; and a CSP page that blocks axe-core's injection answering exit `2` with `quality_unavailable` and nothing persisted |
 | `quality-api.test.ts` | The audit HTTP API against a registered application: a clean audit with working evidence links (per-viewport PNGs and `audit.json`), a real code change producing findings by impact and layout defects only at the narrow viewport, the history listing newest first with summaries that match their reports, and the refusals — cross-site requests, unknown projects, bad policy and viewport input, path traversal on the evidence route |
+| `diagnosis.test.ts` | The Phase 7 workflow through the real CLI and HTTP API: the pilot's defects (missing accessible name, contrast failure, mobile overflow) rendered by the example application, audited with Chromium and axe-core, then explained by `uiproof diagnose` against a **local OpenAI-compatible stub** that answers only the issue keys UIProof sent and cites only the excerpt it was shown — asserting the cited line really contains `id="support-email"`, zero unverified citations, the audit verdict unchanged, the diagnosis stored in its own directory; plus exit `2` and nothing stored without a key, both `--report` and `--audit` refused together and neither accepted alone, a missing source directory refused before the model is contacted, and the dashboard API: availability without disclosing a key, `invalid_options`, cross-site `403`, and `404` for a report or diagnosis that does not exist |
 
 The lifecycle, in the order the suite checks it:
 
@@ -1053,6 +1150,21 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
   scenarios — `0` unchanged, `1` changed, `1` even with a rewritten bundle in the tree, `0` restored,
   `2` missing baseline, `2` tampered image (naming both hashes), `2` unreachable application — and the
   checkout clean afterwards.
+- **Diagnosis (Phase 7), one real session against [examples/example-app](examples/example-app):** the
+  pilot's defective support view (`views/quality.changed.html` swapped in as `views/quality.html`)
+  audited with real Chromium and axe-core → **exit 1, `verdict: fail`**, failures
+  `accessibility.critical`, `accessibility.serious`, `responsive.document-overflow`,
+  `responsive.element-overflow` → `uiproof diagnose --audit …` with the model served by a local
+  OpenAI-compatible stub → **exit 0**, `11 file(s) listed, 5 read`, model `stub-diagnostician` @
+  `127.0.0.1`, 23 ms, **21,438 prompt characters**, 1,833 response characters, **0 unverified
+  citations**. The two exact citations were `views/quality.changed.html:52`
+  (`Support replies arrive within one business day.`, the 2.81:1 note) and
+  `views/quality.changed.html:60` (`<input id="support-email" …>`, the unnamed field). The stored
+  diagnosis kept every measured fact verbatim, the audit JSON was byte-identical afterwards, and the
+  API key appeared nowhere in it. The same run also showed the heuristic's ceiling honestly: the
+  icon-only button issue cited `views/home.html:51`, a *different* button that shares `class="ghost"`,
+  because nothing in the measurement distinguishes the two templates — which is why every candidate
+  records why it was chosen and every citation shows the line it resolved to.
 - **Stability:** five repeat runs at one revision → identical changed-pixel counts; the control
   target → 0 changed pixels, verdict `pass`, three times.
 
@@ -1142,16 +1254,31 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
 - **No visual diffing of the console itself.** Nothing screenshots the dashboard UI, so a styling
   regression in the console would not be caught by the tool that is meant to catch styling
   regressions.
+- **The AI diagnosis is optional, heuristic and fallible.** Candidate files are ranked by route
+  shape, the selector and markup the runner reported, and the literal text on the page — a comment
+  that names a selector, a CSS rule that matches a class for a different element, or two templates
+  that share a class can all make it cite a plausible file that is not the culprit. Every candidate
+  records *why* it was chosen and every citation shows the line it resolved to, so a wrong answer is
+  visible rather than hidden — but it is a hypothesis, not a measurement. It also needs a registered
+  `sourceDir`, sees only bounded excerpts (30 lines per file, 4 files per issue, 24,000 characters
+  and at most 8 issues per request), and drops material that does not fit with a warning instead of
+  truncating it.
+- **No live model call was made while building this.** The pipeline is verified end to end through
+  the real HTTP interface against a local OpenAI-compatible stub, including schema validation,
+  citation verification and CLI/API behaviour; a genuine provider call still depends on the operator's
+  credentials, and no provider was contacted from this checkout.
 
 ---
 
 ## Next milestone
 
-Phase 5 delivered the accessibility and responsive quality gate — `uiproof audit`, the console's
-quality panel and the audit API — which was item 6 of this list, brought forward. What remains of the
-list is next:
+Phase 7 delivered the optional, evidence-grounded AI diagnosis: `uiproof diagnose`, the console's
+*AI diagnosis* panel, the diagnosis API, and a read-only source investigation whose every citation is
+verified against the line UIProof actually read. A diagnosis has no verdict and cannot move one.
 
-**Phase 6 — make the gate sharper, and cheaper to run everywhere.**
+The sharpening work below is still next:
+
+**Making the gate sharper, and cheaper to run everywhere.**
 
 1. **Ignore regions.** Selector- or rectangle-based masks, recorded in the report, so a volatile
    area can be excluded visibly instead of by lowering the global tolerance.
@@ -1165,7 +1292,11 @@ list is next:
    remaining step, and the store format stays unchanged.
 5. **Multi-viewport approvals.** One approval covering desktop/tablet/mobile, with per-viewport pass
    or fail in a single report.
-6. **Then GitHub integration and AI repair proposals** — after all of the above, not before.
+6. **Diagnosis built on the above.** An optional, evidence-grounded explanation is delivered
+   (Phase 7). What would make it sharper is exactly the missing context from this list: a git SHA per
+   run so an explanation can name the change, and ignore regions so a volatile area is not explained
+   as a defect. **Then GitHub integration and AI repair proposals** — after all of the above, not
+   before, and still without a diagnosis ever changing a verdict.
 
 ---
 

@@ -31,7 +31,14 @@ export type ComparisonErrorCode =
   // Phase 5: accessibility and responsive quality checks.
   | "quality_unavailable"
   | "quality_failed"
-  | "quality_policy_invalid";
+  | "quality_policy_invalid"
+  // Phase 7: the optional AI diagnosis.
+  | "diagnosis_unavailable"
+  | "diagnosis_invalid_response"
+  | "diagnosis_source_unregistered"
+  | "diagnosis_source_invalid"
+  | "diagnosis_nothing_to_diagnose"
+  | "diagnosis_context_too_large";
 
 const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   invalid_target: 400,
@@ -62,6 +69,14 @@ const STATUS_BY_CODE: Record<ComparisonErrorCode, number> = {
   quality_unavailable: 503,
   quality_failed: 500,
   quality_policy_invalid: 400,
+  // A diagnosis is optional infrastructure: no model, a refused request or an unusable
+  // answer is a service failure (503/502), never a verdict about the page.
+  diagnosis_unavailable: 503,
+  diagnosis_invalid_response: 502,
+  diagnosis_source_unregistered: 400,
+  diagnosis_source_invalid: 400,
+  diagnosis_nothing_to_diagnose: 400,
+  diagnosis_context_too_large: 400,
 };
 
 export class ComparisonError extends Error {

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Camera, LoaderCircle, Lock, Play, ScanSearch, TriangleAlert } from "lucide-react";
 import { ArtifactViewer } from "@/components/console/artifact-viewer";
+import { DiagnosisPanel } from "@/components/console/diagnosis-panel";
 import { BaselinePanel } from "@/components/console/baseline-panel";
 import { ComparisonTimeline } from "@/components/console/comparison-timeline";
 import { ModePicker, VariantPicker } from "@/components/console/mode-picker";
@@ -547,6 +548,14 @@ export function ComparisonConsole() {
                         }
                       : null,
                   )}
+                />
+              ) : null}
+              {report.status === "regression" || report.quality?.verdict.status === "fail" ? (
+                <DiagnosisPanel
+                  reportId={report.id}
+                  auditId={null}
+                  scopeKey={scopeKey}
+                  sourceLabel={selectedSource?.label ?? report.target.label}
                 />
               ) : null}
               <ArtifactViewer report={report} />

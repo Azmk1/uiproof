@@ -12,7 +12,8 @@ import type { BaselineScope, ComparisonReport } from "@/lib/compare/types";
 import { runQualityAudit } from "@/lib/quality/audit";
 import { describePolicy } from "@/lib/quality/policy";
 import type { QualityVerdict } from "@/lib/quality/types";
-import { loadProjectCatalog, resolveProjectConfigPath } from "@/lib/projects/config";
+import { runDiagnosis } from "@/lib/diagnosis/diagnose";
+import { loadProjectCatalog, resolveProjectConfigPath, resolveRegisteredSourceDir } from "@/lib/projects/config";
 import { findProject, findRoute } from "@/lib/projects/registry";
 import { CLI_NAME, CliUsageError, helpText, parseArgs, type ParsedArgs } from "./args";
 import { EXIT_ERROR, EXIT_PASS, EXIT_REGRESSION, type CliExitCode } from "./exit-codes";
@@ -381,6 +382,94 @@ export async function runAudit(parsed: ParsedArgs, io: CliOutput): Promise<CliEx
   return exitCode;
 }
 
+/**
+ * `uiproof diagnose` — an evidence-grounded explanation of a stored report.
+ *
+ * Exit `0` means a diagnosis was produced and stored. It never returns `1`: a diagnosis is
+ * an explanation, not a verdict, and nothing here can change the verdict of the report it
+ * explains. Without a configured model (or without a registered source directory) it exits
+ * `2` and writes nothing.
+ */
+export async function runDiagnose(parsed: ParsedArgs, io: CliOutput, cwd: string): Promise<CliExitCode> {
+  if (!parsed.report && !parsed.audit) {
+    throw new CliUsageError("diagnose needs --report <run id> (a comparison) or --audit <audit id>.");
+  }
+  if (parsed.report && parsed.audit) {
+    throw new CliUsageError("diagnose explains one report at a time: pass --report or --audit, not both.");
+  }
+
+  const catalog = await loadProjectCatalog();
+  io.note(`Diagnosing ${parsed.audit ? `audit ${parsed.audit}` : `run ${parsed.report}`}…`);
+
+  const { diagnosis, path: storedPath } = await runDiagnosis({
+    reportId: parsed.report ?? undefined,
+    auditId: parsed.audit ?? undefined,
+    sourceDir: parsed.source ?? undefined,
+    lookupRegisteredSource: (projectId) => {
+      const project = projectId ? findProject(catalog.projects, projectId) : undefined;
+      return {
+        dir: project ? resolveRegisteredSourceDir(project, catalog.configPath) : null,
+        from: catalog.configPath,
+      };
+    },
+    maxIssues: parsed.maxIssues ?? undefined,
+    cwd,
+  });
+
+  io.note(
+    `${diagnosis.sourceLabel} · model ${diagnosis.model.model} @ ${diagnosis.model.endpointHost} ` +
+      `(${diagnosis.model.latencyMs} ms, ${diagnosis.model.promptChars} prompt characters)`,
+  );
+  io.note(
+    `Source: ${diagnosis.sourceRoot} — ${diagnosis.filesScanned} file(s) listed, ` +
+      `${diagnosis.filesRead.length} read for this diagnosis`,
+  );
+
+  for (const issue of diagnosis.issues) {
+    io.note("");
+    io.note(issue.title);
+    for (const fact of issue.measured) io.note(`  measured ${fact.label}: ${fact.value}`);
+    const answer = issue.diagnosis;
+    if (!answer) {
+      io.note("  the model did not diagnose this issue");
+      continue;
+    }
+    io.note(`  model (confidence ${answer.confidence}): ${answer.summary}`);
+    io.note(`  likely cause: ${answer.likelyCause}`);
+    io.note(`  suggested approach: ${answer.repairApproach}`);
+    if (answer.uncertainty) io.note(`  uncertainty: ${answer.uncertainty}`);
+    for (const source of answer.sources) {
+      io.note(`  source (verified): ${source.path}${source.line === null ? "" : `:${source.line}`} — ${source.why}`);
+    }
+    for (const source of answer.unverifiedSources) {
+      io.note(
+        `  citation NOT verified: ${source.path}${source.line === null ? "" : `:${source.line}`} — ${source.reason}`,
+      );
+    }
+  }
+
+  io.note("");
+  for (const warning of diagnosis.warnings) io.note(`  note: ${warning}`);
+  if (storedPath) io.note(`Stored in ${storedPath}`);
+  io.note("A diagnosis is a model-generated explanation, never a measurement — no verdict changes because of it.");
+
+  io.result({
+    command: "diagnose",
+    status: "diagnosed",
+    exitCode: EXIT_PASS,
+    scopeKey: diagnosis.scopeKey,
+    reportId: diagnosis.reportId,
+    auditId: diagnosis.auditId,
+    model: diagnosis.model,
+    sourceRoot: diagnosis.sourceRoot,
+    filesScanned: diagnosis.filesScanned,
+    filesRead: diagnosis.filesRead,
+    diagnosis,
+    path: storedPath,
+  });
+  return EXIT_PASS;
+}
+
 export async function runProjects(_parsed: ParsedArgs, io: CliOutput): Promise<CliExitCode> {
   const catalog = await loadProjectCatalog();
   if (catalog.error) {
@@ -572,6 +661,12 @@ function describeFailure(error: unknown): { message: string; hint: string | null
       baseline_version_conflict: "Approved versions are immutable; import a different bundle or clean the store deliberately.",
       portable_bundle_invalid: "Re-export the bundle with `baselines export`.",
       baseline_integrity_failed: "Re-export the bundle; the images in it are not what the metadata claims.",
+      diagnosis_unavailable:
+        "AI diagnosis is optional: set UIPROOF_AI_API_KEY (and optionally UIPROOF_AI_BASE_URL, UIPROOF_AI_MODEL) to enable it. Everything else keeps working without it.",
+      diagnosis_source_unregistered:
+        'Add "sourceDir" to the project in the registration file, or pass --source <directory>.',
+      diagnosis_source_invalid: "Check that the source directory exists and is the application you registered.",
+      diagnosis_invalid_response: "The model's answer was unusable; nothing was stored and no verdict changed.",
     };
     return { message: error.message, hint: hints[error.code] ?? null, code: error.code };
   }
@@ -618,6 +713,8 @@ export async function main(argv: readonly string[], cwd: string = process.cwd())
         return await runCheck(parsed, io, viewportId);
       case "audit":
         return await runAudit(parsed, io);
+      case "diagnose":
+        return await runDiagnose(parsed, io, cwd);
       case "projects":
         return await runProjects(parsed, io);
       case "baselines":

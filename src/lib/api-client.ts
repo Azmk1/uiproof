@@ -10,6 +10,11 @@ import type {
   ReportResponse,
   ReportsResponse,
 } from "@/lib/compare/types";
+import type {
+  DiagnoseResponse,
+  DiagnosesResponse,
+  DiagnosisResponse,
+} from "@/lib/diagnosis/types";
 import type { AuditResponse, AuditsResponse, RunAuditResponse } from "@/lib/quality/types";
 
 /** Thin, typed wrapper around the UIProof HTTP API used by the console. */
@@ -156,6 +161,38 @@ export function fetchAudits(limit?: number): Promise<AuditsResponse> {
 /** One stored audit: measurements and the evidence behind them. */
 export function fetchAudit(id: string): Promise<AuditResponse> {
   return requestJson<AuditResponse>(`/api/audits/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Diagnosis history for one scope, with whether a model is configured at all.
+ *
+ * The console asks this before offering the button, so an unconfigured machine explains
+ * itself instead of showing a control that cannot work.
+ */
+export function fetchDiagnoses(scopeKey?: string | null): Promise<DiagnosesResponse> {
+  const query = scopeKey ? `?scopeKey=${encodeURIComponent(scopeKey)}` : "";
+  return requestJson<DiagnosesResponse>(`/api/diagnoses${query}`);
+}
+
+/** One stored diagnosis, read-only. */
+export function fetchDiagnosis(id: string): Promise<DiagnosisResponse> {
+  return requestJson<DiagnosisResponse>(`/api/diagnoses/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Asks the configured model to explain a stored run or audit. The source directory is
+ * resolved server-side from the registration; the browser cannot name one.
+ */
+export function createDiagnosis(input: {
+  readonly reportId?: string;
+  readonly auditId?: string;
+  readonly maxIssues?: number;
+}): Promise<DiagnoseResponse> {
+  return requestJson<DiagnoseResponse>("/api/diagnoses", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 /** Makes an existing version active again — the explicit replace/restore action. */

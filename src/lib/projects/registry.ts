@@ -173,6 +173,22 @@ function parseProject(input: unknown, index: number): RegisteredProject {
     allowedOrigins = [...new Set(parsed as string[])].filter((entry) => entry !== origin);
   }
 
+  // Phase 7: an explicitly registered source directory the diagnosis may read. Parsed as
+  // a plain path here (this module is pure); resolved and confined where it is opened.
+  const rawSource = source.sourceDir;
+  let sourceDir: string | null = null;
+  if (rawSource !== undefined && rawSource !== null) {
+    if (
+      typeof rawSource !== "string" ||
+      rawSource.trim().length === 0 ||
+      rawSource.length > 300 ||
+      /[\u0000-\u001f\u007f]/.test(rawSource)
+    ) {
+      throw new RangeError(`project "${id}" has a "sourceDir" that is not a usable path (1–300 characters, no control characters).`);
+    }
+    sourceDir = rawSource.trim();
+  }
+
   return {
     id,
     name,
@@ -181,6 +197,7 @@ function parseProject(input: unknown, index: number): RegisteredProject {
     modes: PROJECT_MODES,
     defaultMode: PROJECT_DEFAULT_MODE,
     allowedOrigins,
+    sourceDir,
   };
 }
 

@@ -177,3 +177,18 @@ hosted scanning, publishing a package to npm, and a major architecture rewrite.
   reproducible without a measurement behind it.
 - The CLI's capture surface is unchanged: registered routes on loopback origins only.
 - Existing tests, the console and its baseline lifecycle keep working unchanged.
+
+## Phases 5–7 — recorded in PROGRESS.md
+
+Phases 5 (the accessibility and responsive quality gate), 5.1 (quality-gate correctness and CI
+enforcement), 6 (the independent developer pilot) and 7 (the optional, evidence-grounded AI
+diagnosis) were approved and delivered with their acceptance criteria, milestones and evidence in
+[docs/PROGRESS.md](PROGRESS.md). Their scope is not restated here; one boundary is, because it
+outlives them:
+
+**The AI diagnosis explains, and only explains.** It reads a stored report and a developer-registered
+source directory, asks an OpenAI-compatible model to interpret what was measured, validates the
+answer and verifies every citation against the line UIProof actually read. It never writes to the
+application, never produces a patch or a pull request, never runs without credentials, and never
+changes a pass or a fail — a diagnosis has no verdict of its own. Automated repair remains out of
+scope until a later phase is explicitly approved.

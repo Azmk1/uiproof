@@ -129,6 +129,26 @@ describe("parseArgs", () => {
     });
   });
 
+  it("reads the diagnose options", () => {
+    const byReport = parseArgs(["diagnose", "--report", "run-abc123", "--source", "../app", "--max-issues", "6"]);
+    expect(byReport).toMatchObject({
+      command: "diagnose",
+      report: "run-abc123",
+      audit: null,
+      source: "../app",
+      maxIssues: 6,
+    });
+
+    const byAudit = parseArgs(["diagnose", "--audit", "audit-51117643"]);
+    expect(byAudit).toMatchObject({ command: "diagnose", audit: "audit-51117643", report: null, maxIssues: null });
+  });
+
+  it("refuses a diagnose issue count it cannot honour", () => {
+    for (const raw of ["0", "9", "two", "2.5", "-1"]) {
+      expect(() => parseArgs(["diagnose", "--audit", "audit-1", "--max-issues", raw]), raw).toThrow(CliUsageError);
+    }
+  });
+
   it("refuses quality options it cannot honour", () => {
     expect(() => parseArgs(["audit", "--fail-on", "catastrophic"])).toThrow(CliUsageError);
     expect(() => parseArgs(["audit", "--fail-on", "none-none"])).toThrow(CliUsageError);
@@ -142,7 +162,7 @@ describe("helpText", () => {
   it("documents every command, option and exit code", () => {
     const text = helpText("9.9.9");
     expect(text).toContain("uiproof 9.9.9");
-    for (const command of ["capture", "check", "audit", "projects", "baselines export", "baselines import"]) {
+    for (const command of ["capture", "check", "audit", "diagnose", "projects", "baselines export", "baselines import"]) {
       expect(text).toContain(command);
     }
     for (const option of [
@@ -156,6 +176,10 @@ describe("helpText", () => {
       "--fail-on",
       "--new-only",
       "--wcag-only",
+      "--report",
+      "--audit",
+      "--source",
+      "--max-issues",
     ]) {
       expect(text).toContain(option);
     }
