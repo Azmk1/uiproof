@@ -9,7 +9,7 @@ happened — including the parts that did not work.
 did not change, and gated a pull request correctly. Getting there exposed one blocking product gap
 (UIProof could not be installed at all) and three reporting problems, all fixed here. The pilot also
 left the trust boundary of a guest CI setup weaker than UIProof's own gates, which is written down in
-[§10](#10-remaining-trust-boundary-weaknesses) rather than papered over.
+[§10](#10--remaining-trust-boundary-weaknesses) rather than papered over.
 
 ---
 
@@ -72,7 +72,7 @@ Measured: **40.5 s** for the first install (48 packages — Playwright, `axe-cor
 `pngjs`), **7 s** to reinstall after repacking. Packing takes a few seconds and prints the file list.
 
 This is still not "npm install uiproof". The README now documents the tarball, and
-[§13](#13-limitations) is explicit that publishing is a separate step that has not been taken.
+[§13](#13--limitations) is explicit that publishing is a separate step that has not been taken.
 
 ---
 
@@ -272,7 +272,7 @@ Friction, in order of how much time it cost:
 
 | # | Friction | Cost | Fixed? |
 | --- | --- | --- | --- |
-| 1 | **No install path**: no `bin`, no packed bundle, so a separate project could not run the CLI | blocking | **yes** — `bin/`, `files/`, `prepack` ([§2](#2-distribution-the-pilots-first-finding-was-that-it-could-not-start)) |
+| 1 | **No install path**: no `bin`, no packed bundle, so a separate project could not run the CLI | blocking | **yes** — `bin/`, `files/`, `prepack` ([§2](#2--distribution-the-pilots-first-finding-was-that-it-could-not-start)) |
 | 2 | **The audit listing did not distinguish a violation from a needs-review question.** A viewport printed `0 violation(s)` and then twenty `[serious] color-contrast` lines; nothing said which was which | confusing, and the kind of thing that gets a real failure waved through | **yes** — questions are marked `· needs review` |
 | 3 | **The count itself was wrong**: `24 violation(s)` on a page whose only findings were 24 undecidable contrast questions (the total included needs-review results while the impact counts did not) | actively misleading | **yes** — the line counts violations, and reports the questions beside them |
 | 4 | **`Evidence:` printed a store-relative path** (`audits/audit-…/audit.json`) while `capture` prints an absolute one, so the path could not be opened as printed | a minute per lookup | **yes** — the transcript prints the directory; the JSON keeps its store-relative `reportPath` because the API serves it that way |
@@ -338,7 +338,7 @@ in the project they were told to run it from.
 **After the install section added in this phase: yes, with one caveat.** The steps that were actually
 followed — pack, install, install the browser, declare the routes, capture and approve, check, audit,
 export/import, gate — are the steps the README now documents, and each one behaved as described. The
-caveat is the one in [§13](#13-limitations): today that install is a tarball built from a checkout, not
+caveat is the one in [§13](#13--limitations): today that install is a tarball built from a checkout, not
 a published package.
 
 The realistic adoption cost for a small app, measured here: **about ten minutes** from "tarball in
@@ -388,5 +388,5 @@ repository — it stays an independent checkout, which is the point.
   covered by this project's test suite. The defects were applied, measured and reverted by hand
   (recorded in the pilot's own git history).
 - **The trust boundary of a guest setup is weaker than UIProof's own** — see
-  [§10](#10-remaining-trust-boundary-weaknesses). The pilot proves the tool *finds* real problems; it
+  [§10](#10--remaining-trust-boundary-weaknesses). The pilot proves the tool *finds* real problems; it
   does not prove a guest CI can defend itself against a hostile pull request.

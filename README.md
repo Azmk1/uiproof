@@ -1116,7 +1116,7 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
   reference from the base branch and run in a pinned image. Nothing about them transfers
   automatically: an adopting project that installs the CLI from its own tree, imports its own bundle
   and runs in its own environment has to arrange the equivalent protection itself. The
-  [pilot](docs/PILOT.md#10-remaining-trust-boundary-weaknesses) records what a minimal setup leaves
+  [pilot](docs/PILOT.md#10--remaining-trust-boundary-weaknesses) records what a minimal setup leaves
   open, which is most of it.
 - **The gates block only if the repository says so.** Requiring the `gate · trusted baseline` and
   `gate · accessibility and layout` checks, requiring code-owner review, keeping branches up to date
