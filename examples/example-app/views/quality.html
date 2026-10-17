@@ -7,19 +7,6 @@
     <link rel="stylesheet" href="/assets/app.css" />
   </head>
   <body>
-    <!--
-      The same support screen as quality.html with five deliberate, controlled problems,
-      one per line of intent:
-
-        1. #support-email lost its <label> — a field with no accessible name.
-        2. The topic <label> points at an id that does not exist — an incorrect label.
-        3. The icon-only button hides its glyph from assistive tech and has no name.
-        4. The note is #9a9a9a on #ffffff (2.8:1) — a genuine contrast failure.
-        5. The maintenance banner is a fixed 720px wide — it escapes a phone viewport.
-
-      Nothing else differs from quality.html, so restoring that file removes exactly these
-      findings.
-    -->
     <header class="topbar">
       <span class="brand"><span class="mark">AB</span> Acme Billing</span>
       <nav class="nav" aria-label="Sections">
@@ -40,28 +27,14 @@
         <span class="badge">Replies in one day</span>
       </div>
 
-      <!-- Deliberate defect 5: a fixed width that no phone viewport can hold. -->
-      <div class="card" id="maintenance-banner" style="width: 720px; margin-bottom: 24px">
-        <p class="metric-label">Scheduled maintenance</p>
-        <p style="margin: 0">Invoices are read-only on Sunday 02:00–04:00 UTC.</p>
-      </div>
-
       <section class="panel" style="padding: 24px; margin-bottom: 24px">
-        <!-- Deliberate defect 4: 2.8:1 contrast, well below the 4.5:1 this text needs. -->
-        <p style="margin: 0 0 18px; color: #9a9a9a; background: #ffffff">
-          Support replies arrive within one business day.
-        </p>
         <form>
-          <!--
-            Deliberate defect 1: a field with nothing that names it — no <label>, no
-            aria-label, no title. A placeholder would not fix this either.
-          -->
           <div class="form-row">
+            <label for="support-email">Your email</label>
             <input id="support-email" type="email" autocomplete="email" />
           </div>
-          <!-- Deliberate defect 2: the label's for= points at an id that is not there. -->
           <div class="form-row">
-            <label for="support-topic-picker">Topic</label>
+            <label for="support-topic">Topic</label>
             <select id="support-topic">
               <option>Billing question</option>
               <option>Change payment terms</option>
@@ -72,11 +45,7 @@
             <label for="support-message">Message</label>
             <textarea id="support-message" rows="4"></textarea>
           </div>
-          <!-- Deliberate defect 3: the only content is aria-hidden, so the button has no name. -->
           <button class="primary" type="submit">Send message</button>
-          <button class="ghost" type="button" style="margin-left: 8px">
-            <span aria-hidden="true">✎</span>
-          </button>
         </form>
       </section>
 
@@ -85,7 +54,11 @@
           <h2>Recent requests</h2>
           <button class="ghost" type="button">Export CSV</button>
         </header>
-        <!-- The intentional scroller is kept: it must not be reported as a defect. -->
+        <!--
+          A deliberately scrollable region: the table is wider than a phone screen, so this
+          region scrolls instead of stretching the page. tabindex keeps the scroller itself
+          keyboard reachable.
+        -->
         <div class="table-scroll" tabindex="0">
           <table>
             <thead>
