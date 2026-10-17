@@ -115,6 +115,11 @@ function truncate(value: string, limit = MAX_TEXT_LENGTH): string {
 
 const IMPACTS: readonly string[] = ["minor", "moderate", "serious", "critical"];
 
+/** Severity rank used to keep the most severe appearance of a fingerprint. */
+function impactRank(impact: AxeImpact | null): number {
+  return impact === null ? IMPACTS.length : IMPACTS.indexOf(impact);
+}
+
 function readImpact(value: unknown): AxeImpact | null {
   return typeof value === "string" && IMPACTS.includes(value) ? (value as AxeImpact) : null;
 }
@@ -283,16 +288,31 @@ export async function scanAccessibility(
   const counts = { minor: 0, moderate: 0, serious: 0, critical: 0, unknown: 0 };
   let needsReview = 0;
   let bestPracticeViolations = 0;
-  const seen = new Set<string>();
+
+  // The complete violation set, built before any display cap. A policy must never decide
+  // on a truncated list: a serious violation sorted past the cap would otherwise be
+  // invisible to the verdict. One entry per fingerprint, most severe impact retained.
+  const complete = new Map<string, { impact: AxeImpact | null; wcag: boolean }>();
   for (const finding of findings) {
     if (finding.status === "needs-review") {
       needsReview += 1;
       continue;
     }
     counts[finding.impact ?? "unknown"] += 1;
-    if (finding.wcagTags.length === 0) bestPracticeViolations += 1;
-    seen.add(finding.fingerprint);
+    const wcag = finding.wcagTags.length > 0;
+    if (!wcag) bestPracticeViolations += 1;
+    const existing = complete.get(finding.fingerprint);
+    if (!existing) {
+      complete.set(finding.fingerprint, { impact: finding.impact, wcag });
+      continue;
+    }
+    if (impactRank(finding.impact) > impactRank(existing.impact)) existing.impact = finding.impact;
+    if (wcag) existing.wcag = true;
   }
+
+  const violations = [...complete.entries()]
+    .map(([fingerprint, entry]) => ({ fingerprint, impact: entry.impact, wcag: entry.wcag }))
+    .sort((left, right) => (left.fingerprint < right.fingerprint ? -1 : left.fingerprint > right.fingerprint ? 1 : 0));
 
   return {
     runner: {
@@ -306,6 +326,7 @@ export async function scanAccessibility(
     needsReview,
     bestPracticeViolations,
     findings: findings.slice(0, maxFindings),
+    violations,
     truncated: findings.length > maxFindings,
     totalFindings: findings.length,
     skippedResults: skipped,

@@ -74,6 +74,17 @@ export interface AccessibilityRunnerInfo {
   readonly nodeResults: number;
 }
 
+/**
+ * Every violation in a scan, compact: what a policy or a snapshot needs, and nothing that
+ * is only for display. Never capped — the readable `findings` list is.
+ */
+export interface AccessibilityViolationRef {
+  readonly fingerprint: string;
+  readonly impact: AxeImpact | null;
+  /** True when the rule carries a WCAG tag; false for a best-practice-only rule. */
+  readonly wcag: boolean;
+}
+
 export interface AccessibilitySummary {
   readonly runner: AccessibilityRunnerInfo;
   /** Violations per impact. `unknown` collects findings whose impact was not stated. */
@@ -82,7 +93,14 @@ export interface AccessibilitySummary {
   readonly needsReview: number;
   /** Violations whose rule carries no WCAG tag (best-practice only). */
   readonly bestPracticeViolations: number;
+  /** Bounded, readable findings for a reviewer. Never the input to a verdict. */
   readonly findings: readonly AccessibilityFinding[];
+  /**
+   * The complete violation set, one entry per fingerprint, never capped. Policies,
+   * snapshots and "new since approval" comparisons read this — a reporting limit can hide
+   * a finding from the page, never from a pass/fail decision.
+   */
+  readonly violations: readonly AccessibilityViolationRef[];
   /** True when the finding list was capped; `totalFindings` still holds the full count. */
   readonly truncated: boolean;
   readonly totalFindings: number;
@@ -122,6 +140,12 @@ export interface ResponsiveFinding {
   readonly html: string;
 }
 
+/** One element escaping the viewport, compact — what a policy needs, not the display. */
+export interface ResponsiveDefectRef {
+  readonly selector: string;
+  readonly overflowPx: number;
+}
+
 export interface ResponsiveSummary {
   readonly viewportId: string;
   readonly viewportWidth: number;
@@ -129,8 +153,13 @@ export interface ResponsiveSummary {
   readonly documentOverflowPx: number;
   /** Deliberate horizontal scrollers found on the page, whether or not they overflow. */
   readonly scrollableRegions: readonly string[];
-  /** Defects: overflow nobody absorbed. */
+  /** Bounded, readable defect list for a reviewer. */
   readonly findings: readonly ResponsiveFinding[];
+  /**
+   * Every element escaping the viewport, never capped. The policy evaluates this; the
+   * readable `findings` list is the capped view.
+   */
+  readonly defects: readonly ResponsiveDefectRef[];
   /** Overflow inside a deliberate scroller — evidence, not a defect. */
   readonly contained: readonly ResponsiveFinding[];
   readonly truncated: boolean;

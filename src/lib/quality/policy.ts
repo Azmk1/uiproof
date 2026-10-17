@@ -1,11 +1,10 @@
-import { diffFingerprints, fingerprintViolations } from "./fingerprint";
 import {
   IMPACT_ORDER,
-  type AccessibilityFinding,
   type AccessibilitySummary,
   type AxeImpact,
   type QualityFailure,
   type QualityPolicy,
+  type QualityReference,
   type QualityVerdict,
   type ResponsiveSummary,
 } from "./types";
@@ -111,12 +110,6 @@ function rank(impact: AxeImpact | null): number {
   return impact === null ? IMPACT_ORDER.length : IMPACT_ORDER.indexOf(impact);
 }
 
-function meetsThreshold(finding: AccessibilityFinding, policy: QualityPolicy): boolean {
-  if (policy.failOn === "none") return false;
-  if (!policy.includeBestPractice && finding.wcagTags.length === 0) return false;
-  return rank(finding.impact) >= IMPACT_ORDER.indexOf(policy.failOn);
-}
-
 const IMPACT_CODES: readonly string[] = [...IMPACT_ORDER, "unknown"];
 
 export interface QualityVerdictInput {
@@ -127,8 +120,13 @@ export interface QualityVerdictInput {
     readonly accessibility: AccessibilitySummary;
     readonly responsive: ResponsiveSummary;
   }[];
-  /** Fingerprints of violations already present in the approved reference, or `null`. */
-  readonly referenceFingerprints: readonly string[] | null;
+  /**
+   * The approved accessibility reference for each viewport that has one. `null` means no
+   * approved snapshot exists for any audited viewport. A viewport missing from the map has
+   * no reference of its own — an approval for desktop never authorises a finding on mobile,
+   * because the two were measured at different sizes and axe can legitimately disagree.
+   */
+  readonly referencesByViewport: ReadonlyMap<string, QualityReference> | null;
 }
 
 export interface QualityVerdictResult {
@@ -148,58 +146,136 @@ export interface QualityVerdictResult {
  * Turns measurements into a verdict. Every failure names what was measured, how much of it
  * there was and the evidence behind the count; the same inputs always produce the same
  * verdict and the same order.
+ *
+ * Everything here reads the *complete* measurement indexes (`violations`, `defects`), never
+ * the capped lists the report displays. A reporting limit can hide a finding from a reader;
+ * it can never hide one from the verdict.
+ *
+ * References are matched per viewport. An approved desktop snapshot says nothing about the
+ * mobile rendering of the same page, so a finding there is only "known" if the mobile
+ * reference — for this scope and this viewport — contains its fingerprint. A viewport with
+ * no reference has no approved findings at all: everything measured there is unapproved,
+ * and the verdict says so rather than borrowing another viewport's approval.
  */
 export function evaluateQualityPolicy(input: QualityVerdictInput): QualityVerdictResult {
   const { policy } = input;
   const notes: string[] = [];
+  const references = input.referencesByViewport;
 
-  const allFindings: AccessibilityFinding[] = [];
-  for (const viewport of input.viewports) allFindings.push(...viewport.accessibility.findings);
-  const fingerprints = fingerprintViolations(allFindings);
+  // fingerprint → the most severe appearance, used for threshold and best-practice filters.
+  const appearances = new Map<string, { impact: AxeImpact | null; wcag: boolean }>();
+  const present = new Set<string>();
+  const fresh = new Set<string>();
+  const knownSet = new Set<string>();
+  const resolvedSet = new Set<string>();
+  const uncovered: string[] = [];
+  let anyReference = false;
 
-  const reference = input.referenceFingerprints;
-  if (policy.failOnNewOnly && reference === null) {
-    notes.push(
-      "failOnNewOnly is on, but no approved baseline records an accessibility snapshot for this scope, so every finding counts. Approve a run to establish the reference.",
-    );
+  for (const viewport of input.viewports) {
+    const reference = references?.get(viewport.viewportId) ?? null;
+    if (reference) anyReference = true;
+    const approved = reference ? new Set(reference.fingerprints) : null;
+    const here = new Set<string>();
+
+    if (approved === null) {
+      if (!uncovered.includes(viewport.viewportId)) uncovered.push(viewport.viewportId);
+    } else if (reference && reference.runnerVersion !== viewport.accessibility.runner.version) {
+      notes.push(
+        `The approved snapshot for ${viewport.viewportId} was recorded by axe-core ${reference.runnerVersion}, ` +
+          `but this scan ran ${viewport.accessibility.runner.version}: new and resolved findings can reflect that change.`,
+      );
+    }
+
+    for (const violation of viewport.accessibility.violations) {
+      const fingerprint = violation.fingerprint;
+      here.add(fingerprint);
+      present.add(fingerprint);
+      const existing = appearances.get(fingerprint);
+      if (!existing) {
+        appearances.set(fingerprint, { impact: violation.impact, wcag: violation.wcag });
+      } else {
+        if (rank(violation.impact) > rank(existing.impact)) existing.impact = violation.impact;
+        if (violation.wcag) existing.wcag = true;
+      }
+      if (approved === null || !approved.has(fingerprint)) fresh.add(fingerprint);
+      else knownSet.add(fingerprint);
+    }
+
+    if (approved !== null) {
+      for (const fingerprint of approved) {
+        if (!here.has(fingerprint)) resolvedSet.add(fingerprint);
+      }
+    }
   }
-  const diff = diffFingerprints(fingerprints, reference ?? []);
-  const known = reference === null ? [] : diff.known;
-  const fresh = reference === null ? fingerprints : diff.added;
-  const resolved = reference === null ? [] : diff.resolved;
-  const counted = policy.failOnNewOnly && reference !== null ? fresh : fingerprints;
+
+  // A fingerprint approved at one viewport but unapproved at another is unapproved overall.
+  for (const fingerprint of fresh) knownSet.delete(fingerprint);
+
+  if (!anyReference) {
+    notes.push(
+      "No approved baseline records an accessibility snapshot for this scope, so new, known and resolved findings cannot be distinguished — every finding counts as new.",
+    );
+    if (policy.failOnNewOnly) {
+      notes.push(
+        "failOnNewOnly is on, but there is no approved baseline to compare against, so every finding counts. Approve a run to establish the reference.",
+      );
+    }
+  } else {
+    for (const viewportId of uncovered) {
+      notes.push(
+        `No approved accessibility snapshot exists for ${viewportId}, so findings measured there are treated as unapproved (new).`,
+      );
+    }
+  }
+
+  for (const viewport of input.viewports) {
+    if (viewport.accessibility.truncated) {
+      notes.push(
+        `${viewport.viewportId}: the report lists ${viewport.accessibility.findings.length} of ` +
+          `${viewport.accessibility.totalFindings} findings; the verdict evaluated all ${viewport.accessibility.totalFindings}.`,
+      );
+    }
+    if (viewport.responsive.truncated) {
+      notes.push(
+        `${viewport.viewportId}: the report lists ${viewport.responsive.findings.length} of ` +
+          `${viewport.responsive.defects.length} layout defects; the verdict evaluated all ${viewport.responsive.defects.length}.`,
+      );
+    }
+  }
+
+  const fingerprints = [...present].sort();
+  const freshSorted = [...fresh].sort();
+  const known = [...knownSet].sort();
+  const resolved = [...resolvedSet].sort();
+  const counted = policy.failOnNewOnly ? freshSorted : fingerprints;
 
   const failures: QualityFailure[] = [];
 
   if (policy.failOn !== "none") {
-    const byCode = new Map<string, { count: number; evidence: string[] }>();
-    const seen = new Set<string>();
-    for (const viewport of input.viewports) {
-      for (const finding of viewport.accessibility.findings) {
-        if (finding.status !== "violation") continue;
-        if (!counted.includes(finding.fingerprint)) continue;
-        if (!meetsThreshold(finding, policy)) continue;
-        if (seen.has(finding.fingerprint)) continue;
-        seen.add(finding.fingerprint);
-        const code = `accessibility.${finding.impact ?? "unknown"}`;
-        const bucket = byCode.get(code) ?? { count: 0, evidence: [] };
-        bucket.count += 1;
-        bucket.evidence.push(finding.fingerprint);
-        byCode.set(code, bucket);
-      }
+    const threshold = IMPACT_ORDER.indexOf(policy.failOn);
+    const byCode = new Map<string, string[]>();
+    for (const fingerprint of counted) {
+      const appearance = appearances.get(fingerprint);
+      if (!appearance) continue;
+      if (!policy.includeBestPractice && !appearance.wcag) continue;
+      if (rank(appearance.impact) < threshold) continue;
+      const code = `accessibility.${appearance.impact ?? "unknown"}`;
+      const bucket = byCode.get(code) ?? [];
+      bucket.push(fingerprint);
+      byCode.set(code, bucket);
     }
 
     for (const code of IMPACT_CODES.map((impact) => `accessibility.${impact}`)) {
-      const bucket = byCode.get(code);
-      if (!bucket) continue;
+      const evidence = byCode.get(code);
+      if (!evidence || evidence.length === 0) continue;
       const impact = code.slice("accessibility.".length);
-      const scope = policy.failOnNewOnly && reference !== null ? "new " : "";
+      const scope = policy.failOnNewOnly ? "new " : "";
       failures.push({
         kind: "accessibility",
         code,
-        message: `${bucket.count} ${scope}accessibility violation${bucket.count === 1 ? "" : "s"} at impact "${impact}" meet the "${policy.failOn}" threshold (rule@selector): ${bucket.evidence.join(", ")}`,
-        count: bucket.count,
-        evidence: bucket.evidence,
+        message: `${evidence.length} ${scope}accessibility violation${evidence.length === 1 ? "" : "s"} at impact "${impact}" meet the "${policy.failOn}" threshold (rule@selector): ${evidence.join(", ")}`,
+        count: evidence.length,
+        evidence,
       });
     }
   } else {
@@ -220,16 +296,16 @@ export function evaluateQualityPolicy(input: QualityVerdictInput): QualityVerdic
         evidence: [`viewport:${measuredAt}`],
       });
     }
-    const escaped = viewport.responsive.findings.filter(
-      (finding) => finding.overflowPx > policy.maxElementOverflowPx,
+    const escaped = viewport.responsive.defects.filter(
+      (defect) => defect.overflowPx > policy.maxElementOverflowPx,
     );
     if (escaped.length > 0) {
       failures.push({
         kind: "responsive",
         code: "responsive.element-overflow",
-        message: `${escaped.length} element${escaped.length === 1 ? "" : "s"} escape${escaped.length === 1 ? "s" : ""} the ${measuredAt} viewport (limit ${policy.maxElementOverflowPx}px): ${escaped.map((finding) => `${finding.selector} +${finding.overflowPx}px`).join(", ")}`,
+        message: `${escaped.length} element${escaped.length === 1 ? "" : "s"} escape${escaped.length === 1 ? "s" : ""} the ${measuredAt} viewport (limit ${policy.maxElementOverflowPx}px): ${escaped.map((defect) => `${defect.selector} +${defect.overflowPx}px`).join(", ")}`,
         count: escaped.length,
-        evidence: escaped.map((finding) => finding.selector),
+        evidence: escaped.map((defect) => defect.selector),
       });
     }
   }
@@ -237,7 +313,7 @@ export function evaluateQualityPolicy(input: QualityVerdictInput): QualityVerdic
   return {
     verdict: { status: failures.length === 0 ? "pass" : "fail", failures, notes },
     fingerprints,
-    newFindingFingerprints: fresh,
+    newFindingFingerprints: freshSorted,
     knownFindingFingerprints: known,
     resolvedFindingFingerprints: resolved,
     countedFingerprints: counted,

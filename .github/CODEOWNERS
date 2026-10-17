@@ -1,17 +1,41 @@
-# Who reviews what, and why.
+# Who has to review what.
 #
-# A visual baseline is a decision, not an artifact: whoever can change it decides what counts
-# as a regression. So the two things that together define the gate — the approved bundle and
-# the workflow that enforces it — are reviewed by the project owner by default.
+# Every gate in this repository has the same defect waiting for it: the code that judges a pull
+# request must not be changeable by that pull request. Branch protection turns these entries into a
+# requirement; on their own they are routing. The settings that make them bite are in
+# docs/BRANCH-PROTECTION.md.
 #
-# GitHub only applies this if the base branch requires review from code owners; see
-# docs/BASELINE-UPDATES.md for the settings that have to be enabled by hand.
+# The boundary, in three parts:
+#
+#  1. **The checker.** The policy engine, the scanner wrapper, the CLI and the CI scripts decide
+#     what a verdict is. A pull request that edits them is editing its own judge, so they need a
+#     review from the owner of the gate — and the quality gate goes further and runs an extracted
+#     copy of `src/` and `scripts/` from the base branch anyway.
+#  2. **The reference line.** Approved baselines and accessibility snapshots are the trust anchor a
+#     comparison is made against. Changing one is changing what the gate accepts, so it is reviewed
+#     like code, never as an artifact refresh.
+#  3. **The dependencies.** The gates run in a pinned container, but the installed packages come from
+#     the lockfile in the pull request. A dependency change is inside the trust boundary until the
+#     checker gets its own locked install; these files are how that change gets eyes on it.
 
-# The canonical approved baselines. A change here changes what every future pull request is
-# compared against.
-/examples/uiproof-baselines/ @Azmk1
+# The default owner for anything not listed below.
+*                                   @Azmk1
 
-# The gate itself: the workflow, the pinned rendering environment and scripts the gate runs.
-/.github/workflows/visual-regression.yml @Azmk1
-/.github/workflows/baseline-update.yml @Azmk1
-/scripts/ci/ @Azmk1
+# The checker: what a verdict is made of.
+/src/                               @Azmk1
+/scripts/                           @Azmk1
+/package.json                       @Azmk1
+/pnpm-lock.yaml                     @Azmk1
+/tsconfig.json                      @Azmk1
+/next.config.ts                     @Azmk1
+
+# The gates themselves, their workflows and the registered routes they audit.
+/.github/                           @Azmk1
+/examples/ci/                       @Azmk1
+
+# The reference line: an approval is a reviewed decision, not a side effect.
+/examples/uiproof-baselines/        @Azmk1
+
+# The application under test. It is expected to change in pull requests — that is the point of the
+# gate — but a change here is what the walkthroughs reason about, so it is reviewed too.
+/examples/example-app/              @Azmk1

@@ -18,7 +18,8 @@ import {
   verifyImageIntegrity,
 } from "@/lib/compare/integrity";
 import { getViewport } from "@/lib/compare/targets";
-import type { BaselineManifest, BaselineScope } from "@/lib/compare/types";
+import type { AccessibilitySnapshot, BaselineManifest, BaselineScope } from "@/lib/compare/types";
+import { parseAccessibilitySnapshot } from "@/lib/quality/fingerprint";
 
 /**
  * Portable approved baselines.
@@ -57,6 +58,13 @@ export interface PortableVersion {
   readonly sourceReportId: string;
   readonly capturedRoute: string;
   readonly note: string | null;
+  /**
+   * The accessibility snapshot recorded when this version was approved, when the approval
+   * measured one. Absent means "this approval carries no accessibility reference" — never
+   * "this page had no violations". Bundles written before Phase 5.1 simply omit it, and a
+   * clean checkout can still classify findings once a bundle that has it is imported.
+   */
+  readonly quality?: AccessibilitySnapshot | null;
 }
 
 export interface PortableScope {
@@ -160,6 +168,22 @@ function parsePortableVersion(input: unknown, scope: BaselineScope, viewportId: 
   const capturedRoute = readString(source, "capturedRoute", where);
   if (!capturedRoute!.startsWith("/")) throw invalid(`${where} has a "capturedRoute" that is not a path.`);
 
+  // Strict, and optional: a bundle without a snapshot is valid and yields no reference,
+  // while a bundle with a malformed one is refused outright rather than half-trusted.
+  let quality: AccessibilitySnapshot | null = null;
+  if (source.quality !== undefined && source.quality !== null) {
+    try {
+      quality = parseAccessibilitySnapshot(source.quality);
+    } catch (cause) {
+      throw invalid(`${where} carries an unusable accessibility snapshot: ${(cause as Error).message}`, cause);
+    }
+  }
+  if (quality && quality.approvedAt !== approvedAt) {
+    throw invalid(
+      `${where} records an accessibility snapshot approved at ${quality.approvedAt}, but the version was approved at ${approvedAt}.`,
+    );
+  }
+
   return {
     id: id!,
     file: file!,
@@ -171,6 +195,7 @@ function parsePortableVersion(input: unknown, scope: BaselineScope, viewportId: 
     sourceReportId: readString(source, "sourceReportId", where)!,
     capturedRoute: capturedRoute!,
     note: typeof source.note === "string" ? source.note : null,
+    quality,
   };
 }
 
@@ -289,6 +314,7 @@ function toPortableScope(
       sourceReportId: version.sourceReportId,
       capturedRoute: version.capturedRoute,
       note: version.note,
+      ...(version.quality ? { quality: version.quality } : {}),
     };
   });
   return {
@@ -436,6 +462,8 @@ export interface ImportPortableBaselinesResult {
   readonly scopes: readonly ImportedScopeResult[];
   readonly added: number;
   readonly alreadyPresent: number;
+  /** Versions whose accessibility snapshot was imported and can now act as a reference. */
+  readonly accessibilitySnapshots: number;
 }
 
 /**
@@ -471,6 +499,7 @@ export async function importPortableBaselines(
   const results: ImportedScopeResult[] = [];
   let added = 0;
   let alreadyPresent = 0;
+  let accessibilitySnapshots = 0;
 
   for (const portable of selected) {
     const scope = scopeOfPortableScope(portable);
@@ -502,6 +531,7 @@ export async function importPortableBaselines(
         routeName: portable.routeName,
         origin: portable.origin,
         targetLabel: portable.targetLabel,
+        quality: version.quality ?? null,
         cwd: options.cwd,
         // Only the bundle's own active version is made active, and only when asked for.
         activate: options.activate && version.id === (portable.activeVersionId ?? portable.versions.at(-1)!.id),
@@ -514,6 +544,7 @@ export async function importPortableBaselines(
         alreadyPresent += 1;
       }
       activeVersionId = result.activeVersionId;
+      if (result.version.quality) accessibilitySnapshots += 1;
     }
 
     results.push({
@@ -526,7 +557,7 @@ export async function importPortableBaselines(
     });
   }
 
-  return { scopes: results, added, alreadyPresent };
+  return { scopes: results, added, alreadyPresent, accessibilitySnapshots };
 }
 
 /** Where the store keeps its baselines — used for messages and for `--all` discovery. */

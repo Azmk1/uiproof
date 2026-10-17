@@ -544,6 +544,56 @@ shipping an unlabelled button, a 3:1 contrast note and a 720px banner that escap
 
 ---
 
+## Phase 5.1 — quality-gate correctness and CI enforcement
+
+**Goal:** before adding new product features, make the Phase 5 quality engine honest in the places
+where it could silently pass, and connect it to a genuine GitHub pull-request check. Three specific
+false-pass paths were found and closed, and a second required gate now audits a real page at three
+viewports on every pull request.
+
+### Acceptance criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | **No accessibility violation disappears from a verdict because of a reporting limit** | **Verified** | The scanner builds a complete, uncapped violation index (`AccessibilitySummary.violations`) before the 60-entry display cap, and the policy reads only that. `views/quality.flood.html` produces **68 findings** at desktop whose only serious violation (`svg-img-alt@#flood-icon`) sorts *past* the cap: the 60 shown findings contain **nothing** at `serious` and the verdict still fails on `accessibility.serious` with that fingerprint as evidence, and the report says `truncated: true` with `the verdict evaluated all 68`. Pinned by a unit test that feeds the policy a capped display list and a complete index that disagree |
+| 2 | **An approved finding at one viewport never authorises the same finding at another** | **Verified** | References are matched per viewport (`judgeMeasurements` builds a viewport-keyed map; `evaluateQualityPolicy` compares each audited viewport only with its own reference). With a desktop-only approval of the defective page: `--new-only` across all viewports exits `1` because every fingerprint is new at mobile/tablet, and the verdict says `No approved accessibility snapshot exists for mobile`; the *same page* audited at desktop only exits `0` with 0 new and 4 known. The old union-of-all-references matcher would have passed both |
+| 3 | **Approved snapshots survive export, a wiped store and import** | **Verified** | The portable bundle carries the snapshot per version (scanner version, `approvedAt`, sorted fingerprints, count) and import validates it strictly — unknown fields, unsorted/duplicated fingerprints and a count that disagrees with the list are refused (`portable_bundle_invalid`). Round trip proven end to end: approve → export → import into an empty store → `--new-only` desktop audit exits `0` with `new = 0` and the same 4 known fingerprints as the local store, `accessibilitySnapshots: 1` reported by the import. Backward compatible: a bundle without a snapshot imports with **no** reference and `accessibilitySnapshots: 0`, never an empty one (`--new-only` then counts everything and says so) |
+| 4 | **A CI quality gate that fails on a real defect and never on a missing scan** | **Verified** | `.github/workflows/quality-gate.yml` audits the registered `/support` route at desktop, tablet and mobile inside the pinned image and maps `uiproof audit`'s exit code onto the job (`0` pass, `1` policy failure, `2` infrastructure). It never approves, and `audit-gate.sh` refuses `--new-only` unless a trusted bundle actually imported a reference. The audit JSON, one screenshot per viewport, the failure evidence and the app log are uploaded whether the audit passed or failed |
+| 5 | **The checker is not the pull request's code, and the residual risk is stated** | **Verified** | `scripts/ci/trusted-checker.sh` extracts `src/`, `scripts/` and the registration file from the base branch with `git archive` and the gate runs that copy (`UIPROOF_CLI_DIR`); the workflow points the gate at `$WORK/checker/scripts/ci/audit-gate.sh` and the base revision's config, so a pull request cannot rewrite the policy engine, the scanner wrapper or the route list judging it. CODEOWNERS routes the checker, the workflows, the dependencies and the approved references to review, and `docs/BRANCH-PROTECTION.md` documents the required checks and states precisely what is **not** isolated: the installed dependencies still come from the revision under test |
+| 6 | **Every demonstration, on real Chromium and real axe-core** | **Verified locally; GitHub Actions run recorded below** | `scripts/ci/quality-walkthrough.sh`: clean page passes at 3 viewports (with 3 screenshots), introduced serious violation fails (`1`), introduced mobile overflow fails (`1`) with the failure naming `mobile`, desktop-only approval does not authorise mobile (`1`) while the desktop-only audit passes (`0`), portable reference classifies identically after export/import (`0`), the 68-finding page fails on the serious finding beyond the cap (`1`), the CSP page that refuses the scanner is `2` with **nothing persisted**, and the restore passes (`0`) — **38/38 assertions matched**, locally and in CI |
+| 7 | **Delivery** | **Verified** | lint · typecheck · **238** unit tests / 19 files · production build · **62** browser tests / 8 files — all green; README and `docs/BRANCH-PROTECTION.md` written; committed and pushed without force-pushing |
+
+### Milestone log
+
+| Milestone | Outcome |
+|-----------|---------|
+| M42 — complete measurements | `AccessibilitySummary.violations` (one entry per fingerprint, most severe impact retained) and `ResponsiveSummary.defects`, both built before any display cap; `snapshotOfSummary` and every approval now read the complete index; the CLI prints `(showing 60 of 68 findings; the verdict evaluated all 68)` |
+| M43 — viewport-scoped references | `referencesByViewport` in the policy input, per-viewport new/known/resolved classification, `No approved accessibility snapshot exists for <viewport>` in the verdict notes, and a runner-version note when a snapshot was recorded by a different axe-core |
+| M44 — portable snapshots | `AccessibilitySnapshot` through export/import with strict validation (`parseAccessibilitySnapshot`), applied again inside `importBaselineVersion`; the import reports how many versions carried one |
+| M45 — fixtures | `views/quality.flood.html` (65 landmark findings + one serious `svg-img-alt`, 68 total), `views/quality.csp.html` served with `Content-Security-Policy: script-src 'self'` (the injection axe needs is blocked), and the CI registration file extended with `support`, `support-flood` and `support-csp` |
+| M46 — the gate | `scripts/ci/audit-gate.sh` (evidence always written, `--new-only` refused without an imported reference), `scripts/ci/trusted-checker.sh` (base-revision checker + provenance), `UIPROOF_CLI_DIR` in `lib.sh`, `.github/workflows/quality-gate.yml` |
+| M47 — the walkthrough | `scripts/ci/quality-walkthrough.sh` with 8 scenarios / 38 assertions and `.github/workflows/quality-walkthrough.yml`; the application under test is a scratch copy, so the checkout is never touched |
+| M48 — trust boundary and docs | `.github/CODEOWNERS`, `docs/BRANCH-PROTECTION.md`, README (gate, scoping, portable snapshots, limitations), `e2e/quality-hardening.test.ts` (4 tests) |
+
+### Evidence
+
+| Check | Result |
+|-------|--------|
+| The truncation defect, before and after | The fixture measures 68 findings; the readable list is capped at 60 and contains **0** findings at `serious` or above, while the complete index contains the serious `svg-img-alt`. The verdict fails on it, names the fingerprint, and the report carries `truncated: true` plus the evaluated-all note |
+| Viewport scoping | Desktop-only approval → all-viewports `--new-only` audit exits `1`, records 1 reference (desktop), reports new findings and states that mobile and tablet have none; desktop-only `--new-only` audit exits `0` with 0 new / 4 known |
+| Portable round trip | `baselines export` → bundle manifest carries `quality.fingerprints` (4), `runnerVersion`, `approvedAt`; `baselines import --activate` into an empty store reports `accessibilitySnapshots: 1`; the `--new-only` classification equals the local one (known 4, new 0, resolved 0) |
+| Scanner unavailable | `views/quality.csp.html` → `audit` exits `2` with `quality_unavailable` ("Executing inline script violates … script-src 'self'"), `reportPath: null`, and **no `audits/` directory** in the store; `audit-gate.sh` maps it to an infrastructure failure |
+| The gate itself, locally | `/support` clean → exit `0` with the report and 3 screenshots copied to the evidence directory; `/support-flood` → exit `1`; `/support-csp` → exit `2`; `--new-only` with no imported reference → exit `2` with "there is nothing trustworthy to compare against" |
+| The walkthrough | `38/38 assertions matched`, exit `0`, in the pinned image on GitHub and in Git Bash locally |
+| Full chain | lint · typecheck · 238 unit tests / 19 files · production build · 62 browser tests / 8 files |
+
+**What was not silently accepted:** the two false-pass paths were bugs, not missing features — a
+reporting limit and a union-of-references matcher each let a real defect through. Both are now refused
+by construction (the verdict reads only the complete index; a reference is matched only to the
+viewport it was approved for), and both have a fixture that fails if the property is lost again.
+
+---
+
 ## Decisions made during implementation
 
 - **Route groups** `(console)` / `(fixtures)` keep console chrome off the screens under test.
@@ -612,19 +662,24 @@ shipping an unlabelled button, a 3:1 contrast note and a 720px banner that escap
 
 ## Blockers
 
-None outstanding. One item needs a human: the branch-protection settings that make the gate blocking
-(required status check `gate · trusted baseline`, required code-owner review, up-to-date branches,
-restricted pushes to the base branch) are repository settings GitHub does not let a workflow set. They
-are listed in `docs/BASELINE-UPDATES.md`.
+None outstanding. One item needs a human: the branch-protection settings that make both gates
+blocking — required status checks `gate · trusted baseline` **and** `gate · accessibility and layout`,
+required code-owner review, up-to-date branches, restricted pushes to the base branch — are
+repository settings GitHub does not let a workflow set. They are listed in
+`docs/BRANCH-PROTECTION.md` (and the older gate section of `docs/BASELINE-UPDATES.md`).
+
+One dependency of the quality gate is stated rather than hidden: the checker is extracted from the
+base branch, but it resolves its installed dependencies from the revision under test, so a pull
+request that edits `pnpm-lock.yaml` is still inside the trust boundary. CODEOWNERS routes those files
+to review; a separate locked install is the next step.
 
 ## Next approved action
 
-Phase 5 is delivered and verified on `main`: the quality gate measures accessibility and responsive
-layout on real pages, judges them against a policy whose every threshold is a flag, stores the
-evidence behind every measurement, and runs through the CLI (`uiproof audit`), the HTTP API and the
-console — with the seven demonstration points driven end to end against an independent application.
-A failing audit exits `1` and never touches an approved baseline. The recommended next milestone is
-the sharpening work this displaced:
+Phase 5.1 is delivered and verified on `main`: the quality gate's three false-pass paths are closed
+(complete verdict inputs, viewport-scoped approvals, portable snapshots), and the accessibility and
+layout check is a required CI gate that audits a real page at three viewports, runs its own
+implementation from the protected base revision, and writes its evidence whether it passes or fails.
+The recommended next milestone remains the sharpening work this displaced:
 **Phase 6 — make the gate sharper, and cheaper to run everywhere**: ignore regions recorded in the
 report, a git SHA per run, `uiproof check --all` across a whole project, a published CLI package, and
 multi-viewport approvals. Two smaller items belong with it: an automated check that the manual branch

@@ -1,4 +1,4 @@
-import type { AccessibilityFinding, AccessibilitySnapshot } from "./types";
+import type { AccessibilityFinding, AccessibilitySnapshot, AccessibilitySummary } from "./types";
 
 /**
  * Finding identity.
@@ -71,6 +71,31 @@ export function diffFingerprints(current: readonly string[], reference: readonly
   return { added: added.sort(), known: known.sort(), resolved: resolved.sort() };
 }
 
+/** True when a scan carries the complete violation index (Phase 5.1 and later). */
+export function hasCompleteViolationIndex(summary: AccessibilitySummary): boolean {
+  return Array.isArray(summary.violations);
+}
+
+/**
+ * Every violation fingerprint in a scan.
+ *
+ * Reads the complete index, so a display cap cannot shrink an approval or a policy input.
+ * Reports written before the index existed fall back to the readable list — and the caller
+ * can tell the difference with `hasCompleteViolationIndex`.
+ */
+export function completeViolationFingerprints(summary: AccessibilitySummary): string[] {
+  if (hasCompleteViolationIndex(summary)) {
+    const unique = new Set<string>();
+    for (const violation of summary.violations) {
+      if (typeof violation?.fingerprint === "string" && violation.fingerprint.length > 0) {
+        unique.add(violation.fingerprint);
+      }
+    }
+    return [...unique].sort();
+  }
+  return fingerprintViolations(summary.findings);
+}
+
 /** The snapshot an approval records, so a later check has something trustworthy to diff. */
 export function snapshotOf(
   findings: readonly AccessibilityFinding[],
@@ -79,4 +104,82 @@ export function snapshotOf(
 ): AccessibilitySnapshot {
   const fingerprints = fingerprintViolations(findings);
   return { runnerVersion, approvedAt, fingerprints, violationCount: fingerprints.length };
+}
+
+/** The snapshot for an approval, from the complete measurement rather than the display list. */
+export function snapshotOfSummary(summary: AccessibilitySummary, approvedAt: string): AccessibilitySnapshot {
+  const fingerprints = completeViolationFingerprints(summary);
+  return {
+    runnerVersion: summary.runner.version,
+    approvedAt,
+    fingerprints,
+    violationCount: fingerprints.length,
+  };
+}
+
+const SNAPSHOT_KEYS = ["runnerVersion", "approvedAt", "fingerprints", "violationCount"] as const;
+
+/**
+ * Reads an accessibility snapshot from untrusted input (a bundle manifest, an import call).
+ *
+ * Strict on purpose: fingerprints must be unique, sorted, bounded and shaped like
+ * `<rule>@<selector>`; `violationCount` must agree with the list; unknown fields are
+ * refused. An approval is a trust anchor, so a malformed one is an error, never a guess.
+ */
+export function parseAccessibilitySnapshot(input: unknown): AccessibilitySnapshot {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new RangeError("an accessibility snapshot must be a JSON object");
+  }
+  const source = input as Record<string, unknown>;
+  for (const key of Object.keys(source)) {
+    if (!(SNAPSHOT_KEYS as readonly string[]).includes(key)) {
+      throw new RangeError(`unknown accessibility snapshot field ${JSON.stringify(key)}`);
+    }
+  }
+
+  const runnerVersion = source.runnerVersion;
+  if (typeof runnerVersion !== "string" || runnerVersion.trim().length === 0) {
+    throw new RangeError('the accessibility snapshot is missing a usable "runnerVersion"');
+  }
+  const approvedAt = source.approvedAt;
+  if (typeof approvedAt !== "string" || Number.isNaN(Date.parse(approvedAt))) {
+    throw new RangeError('the accessibility snapshot is missing a usable "approvedAt"');
+  }
+
+  const rawFingerprints = source.fingerprints;
+  if (!Array.isArray(rawFingerprints)) {
+    throw new RangeError('the accessibility snapshot needs a "fingerprints" array');
+  }
+  const fingerprints: string[] = [];
+  const seen = new Set<string>();
+  let previous = "";
+  for (const entry of rawFingerprints) {
+    if (typeof entry !== "string" || entry.length === 0 || entry.length > MAX_FINGERPRINT_LENGTH) {
+      throw new RangeError("every accessibility fingerprint must be a bounded, non-empty string");
+    }
+    if (!entry.includes("@")) {
+      throw new RangeError(`not a <rule>@<selector> fingerprint: ${JSON.stringify(entry)}`);
+    }
+    if (seen.has(entry)) {
+      throw new RangeError(`fingerprint ${JSON.stringify(entry)} appears more than once`);
+    }
+    if (previous.length > 0 && entry < previous) {
+      throw new RangeError("accessibility fingerprints must be stored in sorted order");
+    }
+    seen.add(entry);
+    previous = entry;
+    fingerprints.push(entry);
+  }
+
+  const violationCount = source.violationCount;
+  if (typeof violationCount !== "number" || !Number.isInteger(violationCount) || violationCount < 0) {
+    throw new RangeError('the accessibility snapshot needs an integer "violationCount"');
+  }
+  if (violationCount !== fingerprints.length) {
+    throw new RangeError(
+      `the snapshot claims ${violationCount} violation(s) but lists ${fingerprints.length} fingerprint(s)`,
+    );
+  }
+
+  return { runnerVersion, approvedAt, fingerprints, violationCount };
 }

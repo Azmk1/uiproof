@@ -1,0 +1,109 @@
+name: Quality walkthrough
+
+# A demonstration and an integration test — **not** a gate.
+#
+# The gate is `.github/workflows/quality-gate.yml`, and it fails a job when a real
+# accessibility or layout defect is introduced. This workflow is the deliberate opposite: it
+# walks the pass → defect → restore sequence and *asserts the exit codes*, so the defect shows
+# up here as an expected exit 1 rather than as a failed job. Nothing in a real pipeline should
+# be built this way, which is why it is a separate file, a separate workflow name and a
+# separate job — the same split the visual gate and its walkthrough use.
+#
+# What it adds beyond the gate, all with real Chromium and real axe-core:
+#
+#   * a clean page passes at desktop, tablet and mobile (0), with a screenshot per viewport;
+#   * a newly introduced serious accessibility violation fails (1);
+#   * a newly introduced mobile overflow fails (1), named at the viewport it was measured at;
+#   * an approval made at desktop does not authorise the same finding on mobile: with
+#     `--new-only` the mobile findings are still new while the desktop-only audit passes;
+#   * those approved snapshots survive export, a wiped store and import — the portable
+#     reference classifies exactly as the local one did;
+#   * more violations than the report's display cap: the serious finding that sorted past the
+#     cap still fails the verdict, and the report says it evaluated all of them;
+#   * a page whose CSP refuses the scanner is an infrastructure failure (2), with nothing
+#     persisted that could be mistaken for a clean scan;
+#   * restoring the page passes again (0).
+#
+# It runs on `main` and by hand. The application under test is a scratch copy of the example
+# app, so the walkthrough never touches the checkout; the summary TSV and every audit JSON,
+# screenshot and log are uploaded as artifacts.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: quality-walkthrough-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: "1"
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  UIPROOF_CONFIG: examples/ci/uiproof.config.json
+  UIPROOF_PROJECT: example-app
+  # The working directories are built from `$RUNNER_TEMP` inside the steps: `runner` is not a
+  # context a workflow-level `env` may use.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: ${{ github.workspace }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  walkthrough:
+    name: walkthrough · every quality answer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Same pinned environment as the gate, for the same reason: findings measured in a
+    # different browser than the gate uses would not be evidence about the gate.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Walk through every quality answer
+        # Exits 1 if any scenario answered something other than what the brief documents.
+        run: |
+          WORK="${RUNNER_TEMP}/uiproof/quality-walkthrough"
+          bash scripts/ci/quality-walkthrough.sh \
+            --artifacts "$WORK/artifacts" \
+            --stores "$WORK/stores" \
+            --config "$UIPROOF_CONFIG" \
+            --project "$UIPROOF_PROJECT"
+
+      - name: Upload the walkthrough evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uiproof-quality-walkthrough
+          path: ${{ runner.temp }}/uiproof/quality-walkthrough
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Check that the walkthrough left the checkout clean
+        # The walkthrough works on a scratch copy of the application. If it ever edited the
+        # checkout, this is where it would show up rather than in somebody's next commit.
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the walkthrough modified the checkout"
+            git status --porcelain
+            exit 1
+          fi
+          echo "the checkout is unchanged: the walkthrough only touched its scratch copy"

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Billing — Support export (stress fixture)</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <!--
+      The stress fixture: a page whose content is a long list of loose blocks.
+
+      Why it exists. axe reports one `region` violation per top-level node that sits outside
+      any landmark — a moderate, best-practice finding. Sixty-five of those plus one serious
+      `svg-img-alt` violation give a scan of 66 findings, more than the report's 60-finding
+      display cap, and the serious one sorts *last* (`region` < `svg-img-alt`). A policy that
+      evaluated the truncated display list under `--fail-on serious` would see sixty moderate
+      findings, decide nothing met the threshold, and pass a page that has a serious
+      violation on it. That silent pass is the defect this fixture is here to catch: the
+      verdict must read the complete measurement, and the report must say it was truncated.
+
+      Nothing here is styling or behaviour. It is a list of blocks and one unlabelled icon.
+    -->
+    <div>
+      <h1>Support export batches</h1>
+      <p>
+        Every batch below is a boxed section of the support export. They are deliberately not
+        wrapped in a landmark, which is what makes each one its own region finding.
+      </p>
+    </div>
+
+    <div id="flood-block-1"><h2>Batch 1</h2><p>Jan 2026 — 1,204 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-2"><h2>Batch 2</h2><p>Feb 2026 — 1,188 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-3"><h2>Batch 3</h2><p>Mar 2026 — 1,301 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-4"><h2>Batch 4</h2><p>Apr 2026 — 1,172 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-5"><h2>Batch 5</h2><p>May 2026 — 1,155 tickets, 99% resolved within one day.</p></div>
+    <div id="flood-block-6"><h2>Batch 6</h2><p>Jun 2026 — 1,090 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-7"><h2>Batch 7</h2><p>Jul 2026 — 1,264 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-8"><h2>Batch 8</h2><p>Aug 2026 — 1,338 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-9"><h2>Batch 9</h2><p>Sep 2026 — 1,412 tickets, 94% resolved within one day.</p></div>
+    <div id="flood-block-10"><h2>Batch 10</h2><p>Oct 2026 — 1,377 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-11"><h2>Batch 11</h2><p>Nov 2026 — 1,201 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-12"><h2>Batch 12</h2><p>Dec 2026 — 1,146 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-13"><h2>Batch 13</h2><p>Jan 2026 — 1,097 tickets, 99% resolved within one day.</p></div>
+    <div id="flood-block-14"><h2>Batch 14</h2><p>Feb 2026 — 1,233 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-15"><h2>Batch 15</h2><p>Mar 2026 — 1,284 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-16"><h2>Batch 16</h2><p>Apr 2026 — 1,310 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-17"><h2>Batch 17</h2><p>May 2026 — 1,168 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-18"><h2>Batch 18</h2><p>Jun 2026 — 1,222 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-19"><h2>Batch 19</h2><p>Jul 2026 — 1,301 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-20"><h2>Batch 20</h2><p>Aug 2026 — 1,412 tickets, 94% resolved within one day.</p></div>
+    <div id="flood-block-21"><h2>Batch 21</h2><p>Sep 2026 — 1,377 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-22"><h2>Batch 22</h2><p>Oct 2026 — 1,201 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-23"><h2>Batch 23</h2><p>Nov 2026 — 1,146 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-24"><h2>Batch 24</h2><p>Dec 2026 — 1,097 tickets, 99% resolved within one day.</p></div>
+    <div id="flood-block-25"><h2>Batch 25</h2><p>Jan 2026 — 1,233 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-26"><h2>Batch 26</h2><p>Feb 2026 — 1,284 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-27"><h2>Batch 27</h2><p>Mar 2026 — 1,310 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-28"><h2>Batch 28</h2><p>Apr 2026 — 1,168 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-29"><h2>Batch 29</h2><p>May 2026 — 1,222 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-30"><h2>Batch 30</h2><p>Jun 2026 — 1,301 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-31"><h2>Batch 31</h2><p>Jul 2026 — 1,412 tickets, 94% resolved within one day.</p></div>
+    <div id="flood-block-32"><h2>Batch 32</h2><p>Aug 2026 — 1,377 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-33"><h2>Batch 33</h2><p>Sep 2026 — 1,201 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-34"><h2>Batch 34</h2><p>Oct 2026 — 1,146 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-35"><h2>Batch 35</h2><p>Nov 2026 — 1,097 tickets, 99% resolved within one day.</p></div>
+    <div id="flood-block-36"><h2>Batch 36</h2><p>Dec 2026 — 1,233 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-37"><h2>Batch 37</h2><p>Jan 2026 — 1,284 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-38"><h2>Batch 38</h2><p>Feb 2026 — 1,310 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-39"><h2>Batch 39</h2><p>Mar 2026 — 1,168 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-40"><h2>Batch 40</h2><p>Apr 2026 — 1,222 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-41"><h2>Batch 41</h2><p>May 2026 — 1,301 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-42"><h2>Batch 42</h2><p>Jun 2026 — 1,412 tickets, 94% resolved within one day.</p></div>
+    <div id="flood-block-43"><h2>Batch 43</h2><p>Jul 2026 — 1,377 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-44"><h2>Batch 44</h2><p>Aug 2026 — 1,201 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-45"><h2>Batch 45</h2><p>Sep 2026 — 1,146 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-46"><h2>Batch 46</h2><p>Oct 2026 — 1,097 tickets, 99% resolved within one day.</p></div>
+    <div id="flood-block-47"><h2>Batch 47</h2><p>Nov 2026 — 1,233 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-48"><h2>Batch 48</h2><p>Dec 2026 — 1,284 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-49"><h2>Batch 49</h2><p>Jan 2026 — 1,310 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-50"><h2>Batch 50</h2><p>Feb 2026 — 1,168 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-51"><h2>Batch 51</h2><p>Mar 2026 — 1,222 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-52"><h2>Batch 52</h2><p>Apr 2026 — 1,301 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-53"><h2>Batch 53</h2><p>May 2026 — 1,412 tickets, 94% resolved within one day.</p></div>
+    <div id="flood-block-54"><h2>Batch 54</h2><p>Jun 2026 — 1,377 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-55"><h2>Batch 55</h2><p>Jul 2026 — 1,201 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-56"><h2>Batch 56</h2><p>Aug 2026 — 1,146 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-57"><h2>Batch 57</h2><p>Sep 2026 — 1,097 tickets, 99% resolved within one day.</p></div>
+    <div id="flood-block-58"><h2>Batch 58</h2><p>Oct 2026 — 1,233 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-59"><h2>Batch 59</h2><p>Nov 2026 — 1,284 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-60"><h2>Batch 60</h2><p>Dec 2026 — 1,310 tickets, 95% resolved within one day.</p></div>
+    <div id="flood-block-61"><h2>Batch 61</h2><p>Jan 2026 — 1,168 tickets, 98% resolved within one day.</p></div>
+    <div id="flood-block-62"><h2>Batch 62</h2><p>Feb 2026 — 1,222 tickets, 97% resolved within one day.</p></div>
+    <div id="flood-block-63"><h2>Batch 63</h2><p>Mar 2026 — 1,301 tickets, 96% resolved within one day.</p></div>
+    <div id="flood-block-64"><h2>Batch 64</h2><p>Apr 2026 — 1,412 tickets, 94% resolved within one day.</p></div>
+    <div id="flood-block-65"><h2>Batch 65</h2><p>May 2026 — 1,377 tickets, 95% resolved within one day.</p></div>
+
+    <!-- The serious violation, last in sort order: an icon with no accessible name. -->
+    <svg id="flood-icon" role="img" width="24" height="24" viewBox="0 0 24 24">
+      <rect x="0" y="0" width="24" height="24"></rect>
+    </svg>
+  </body>
+</html>

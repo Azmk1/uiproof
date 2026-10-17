@@ -7,6 +7,9 @@
       "routes": [
         { "id": "home", "name": "Overview", "path": "/" },
         { "id": "settings", "name": "Settings", "path": "/settings" },
+        { "id": "support", "name": "Contact support (the quality gate audits this page)", "path": "/support" },
+        { "id": "support-flood", "name": "Support export, stress fixture (past the report cap)", "path": "/support-flood" },
+        { "id": "support-csp", "name": "Support page that refuses the scanner", "path": "/support-csp" },
         { "id": "moved", "name": "Redirects away (a capture of it must be refused)", "path": "/moved" }
       ],
       "allowedOrigins": []

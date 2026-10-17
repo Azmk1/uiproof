@@ -1,0 +1,175 @@
+name: Quality gate
+
+# The required accessibility and layout check for a pull request: audit the application under
+# test and fail when the documented policy fails.
+#
+# Three things make this a gate rather than a report.
+#
+#   * **The verdict comes from the CLI's own exit code.** `scripts/ci/audit-gate.sh` runs
+#     `uiproof audit` — real Chromium, real axe-core, no mocks — and maps 0/1/2 onto the job:
+#     0 passes, 1 (a policy failure) fails, 2 (the audit could not be answered: the scanner
+#     was refused, Chromium or the store failed) fails as infrastructure. A gate can never be
+#     green because the check did not run.
+#   * **The checker is not the pull request's code.** The application under test is the pull
+#     request's working tree, started with a scrubbed environment (`env -i` in
+#     `scripts/ci/lib.sh`). The implementation that *judges* it — `src/`, `scripts/`, the
+#     registration file — is extracted with `git archive` from the pull request's base branch
+#     (`scripts/ci/trusted-checker.sh`) and run from there via `UIPROOF_CLI_DIR`, so a pull
+#     request cannot rewrite the policy engine, the scanner wrapper or this gate script.
+#     Dependencies are the one part of the checker still taken from the revision under test —
+#     stated in the script and in docs/BRANCH-PROTECTION.md, not papered over.
+#   * **It never approves anything and it never uses `--new-only` without a reference.** An
+#     approval made by the code under test would authorise the very change being judged; and
+#     `--new-only` is only meaningful against an accessibility snapshot that a trusted bundle
+#     actually imported, which `audit-gate.sh` refuses to fake.
+#
+#   0  the policy passed                                    → the job succeeds
+#   1  an accessibility or layout policy failure            → the job fails
+#   2  the audit could not be answered                      → the job fails
+#
+# The reference line comes from the base branch, exactly like the visual gate's baseline: a
+# pull request cannot edit `examples/uiproof-baselines` to bless its own findings. When the
+# recorded base revision carries reference images it also carries accessibility snapshots, and
+# the report says which findings are new, known and resolved against them; when it carries
+# none, the full documented policy runs and the report states that no reference exists.
+#
+# What a repository must configure by hand (GitHub does not let a workflow protect itself —
+# see docs/BRANCH-PROTECTION.md):
+#   * a branch protection rule on the base branch requiring the check "gate · accessibility
+#     and layout" (this job) and the visual gate's "gate · trusted baseline";
+#   * a review requirement, with CODEOWNERS routing the checker's implementation — `src/`,
+#     `scripts/ci/`, `.github/workflows/` and the registered configuration — to its owner.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: quality-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: "1"
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  UIPROOF_CONFIG: examples/ci/uiproof.config.json
+  UIPROOF_PROJECT: example-app
+  UIPROOF_ROUTE: support
+  UIPROOF_BUNDLE_PATH: examples/uiproof-baselines
+  # The commit the trusted checker and reference come from: the pull request's target branch,
+  # or the branch this push landed on. A pull request can write to neither.
+  TRUSTED_REF: ${{ github.event.pull_request.base.ref || github.ref_name }}
+  # A container job runs as root over a workspace owned by the runner user, and git refuses to
+  # read a repository it does not consider its own. This marks the workspace — and only the
+  # workspace — as safe for these processes; nothing global is written.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: ${{ github.workspace }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  quality:
+    name: gate · accessibility and layout
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # The pinned rendering environment, the same bytes as the visual gate: a finding must be
+    # reproducible by hand, and axe-core's results depend on the browser it ran in. Keep this
+    # in step with package.json and scripts/ci/lib.sh — src/lib/ci/pinned-environment.test.ts
+    # fails the unit suite when they drift apart.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf
+
+    steps:
+      - name: Checkout the proposed code
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Extract the trusted checker from the base branch
+        # `src/`, `scripts/` and the registration file as the base commit has them. The
+        # extracted checker is what produces the verdict below; the working tree provides the
+        # application under test and the installed dependencies (a stated limitation).
+        run: |
+          WORK="${RUNNER_TEMP}/uiproof/quality-gate"
+          mkdir -p "$WORK"
+          git fetch --no-tags --depth=1 origin "$TRUSTED_REF"
+          echo "base branch: $TRUSTED_REF (tip $(git rev-parse FETCH_HEAD))"
+          bash scripts/ci/trusted-checker.sh \
+            --from-ref FETCH_HEAD \
+            --into "$WORK/checker" \
+            --link-node-modules "$PWD/node_modules" \
+            --provenance "$WORK/trusted-checker.txt"
+
+      - name: Extract the trusted reference line from the base branch
+        # The same bundle the visual gate uses. Its accessibility snapshots become the
+        # "new / known / resolved" reference; when the base commit has no bundle the audit
+        # still runs the full policy and says so in the report.
+        id: reference
+        run: |
+          WORK="${RUNNER_TEMP}/uiproof/quality-gate"
+          BUNDLE="${RUNNER_TEMP}/uiproof/quality-trusted-baseline"
+          if git cat-file -e "FETCH_HEAD:${UIPROOF_BUNDLE_PATH}/uiproof-baselines.json" 2>/dev/null; then
+            bash scripts/ci/trusted-baseline.sh \
+              --from-ref FETCH_HEAD \
+              --into "$BUNDLE" \
+              --path "$UIPROOF_BUNDLE_PATH" \
+              --provenance "$WORK/trusted-baseline.txt"
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "the base revision has no ${UIPROOF_BUNDLE_PATH}/uiproof-baselines.json: the gate runs the full policy without a reference and the report will say so"
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate the proposed code
+        # One step, because it is one decision: start the application under test, audit it at
+        # every viewport with the documented policy, write the evidence down and exit with the
+        # audit's own code. No capture and no approval anywhere in it.
+        run: |
+          WORK="${RUNNER_TEMP}/uiproof/quality-gate"
+          BUNDLE_ARGS=()
+          if [ "${{ steps.reference.outputs.available }}" = "true" ]; then
+            BUNDLE_ARGS+=(--bundle "${RUNNER_TEMP}/uiproof/quality-trusted-baseline")
+          fi
+          # The registration file the base revision had, when it had one: a pull request
+          # cannot point the gate at a different page by editing its own config.
+          if [ -f "$WORK/checker/uiproof.config.json" ]; then
+            CONFIG_ARGS=(--config "$WORK/checker/uiproof.config.json")
+          else
+            CONFIG_ARGS=(--config "$UIPROOF_CONFIG")
+          fi
+          UIPROOF_CLI_DIR="$WORK/checker" \
+            bash "$WORK/checker/scripts/ci/audit-gate.sh" \
+            "${BUNDLE_ARGS[@]}" \
+            "${CONFIG_ARGS[@]}" \
+            --store "$WORK/store" \
+            --artifacts "$WORK/artifacts" \
+            --project "$UIPROOF_PROJECT" \
+            --route "$UIPROOF_ROUTE" \
+            --fail-on serious
+
+      - name: Upload the audit report, screenshots and evidence
+        # Whether the audit passed, failed or could not run: a policy failure has to be
+        # reviewable from the artifacts alone.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uiproof-quality-gate
+          path: |
+            ${{ runner.temp }}/uiproof/quality-gate
+            ${{ runner.temp }}/uiproof/quality-trusted-baseline
+          if-no-files-found: warn
+          retention-days: 30

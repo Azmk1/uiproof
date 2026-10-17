@@ -244,6 +244,9 @@ export async function measureResponsive(page: Page, viewport: ViewportPreset): P
     documentOverflowPx: raw.documentOverflowPx,
     scrollableRegions: raw.scrollableRegions,
     findings: raw.findings.slice(0, MAX_FINDINGS),
+    // The complete defect set, before the display cap: a policy must never pass a layout
+    // because the element that escaped was number 41 of 40 reported defects.
+    defects: raw.findings.map((finding) => ({ selector: finding.selector, overflowPx: finding.overflowPx })),
     contained: raw.contained.slice(0, MAX_CONTAINED),
     truncated: raw.findings.length > MAX_FINDINGS,
     elementsMeasured: raw.elementsMeasured,

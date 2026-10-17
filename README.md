@@ -68,6 +68,15 @@ AI-assisted repair proposals — none of that is wired up yet.
   pinned rendering image, and lets the comparison's own exit code fail the job. It never captures and
   never approves — a job that approves the page it is about to test cannot fail. The pass →
   regression → restore walkthrough is a separate workflow, labelled as the demonstration it is.
+- **A second gate for accessibility and layout.** [.github/workflows/quality-gate.yml](.github/workflows/quality-gate.yml)
+  audits the example application's support page at desktop, tablet and mobile with real Chromium and
+  real axe-core, and fails the required check when the documented policy fails — an accessibility
+  violation at `serious` or above, or layout escaping the viewport. A scan that cannot run is exit
+  `2`, never a green build, and the audit JSON with one screenshot per viewport is uploaded whether
+  the audit passed. The checker that judges the pull request — `src/`, `scripts/` and the registered
+  route list — is extracted from the pull request's base branch, so a pull request cannot rewrite the
+  policy engine judging it; the dependencies it borrows from the revision under test are the stated
+  limitation ([docs/BRANCH-PROTECTION.md](docs/BRANCH-PROTECTION.md)).
 - **A deliberately closed capture surface.** The engine only ever navigates to compiled demo routes
   or to routes named in the registration file, on the loopback origins that file declares. A browser
   request cannot name a URL: it sends a project id and a route id, and the server resolves them
@@ -286,6 +295,7 @@ e2e/                                   # browser suite (real Chromium, real serv
 ├── project-integration.test.ts        # register → capture → approve → real UI change → regress → restore → restart
 ├── cli.test.ts                        # the CLI through the real process: exit codes, portable bundles
 ├── quality.test.ts                    # the quality gate's seven demonstration points, through the CLI
+├── quality-hardening.test.ts          # the cap, viewport scoping, portable snapshots, refused scanner
 └── quality-api.test.ts                # the audit HTTP API: evidence links, findings, refusals
 examples/
 ├── example-app/                       # the independent application (no dependencies)
@@ -610,6 +620,21 @@ known and which a change resolved.
 A passing audit is not a certification. It is what this rule set found, on this page, in this
 browser, at this moment — and the report says exactly that.
 
+**A reporting limit can hide a finding from a reader, never from the verdict.** The readable
+finding list is capped at 60 entries, but the decision is made on the complete violation index
+(`accessibility.violations`) that every scan carries, so a serious violation that sorts past the
+cap still fails the check. When the list is capped the report says so — `truncated: true`, the total
+count above it, a note next to the verdict and `(showing 60 of 68 findings; the verdict evaluated
+all 68)` in the CLI output.
+
+**An approval is scoped to the viewport it was made at.** `--new-only` compares each audited
+viewport against the snapshot approved for *that* viewport: a desktop approval does not authorise
+the same fingerprint on mobile, where axe can legitimately report differently. A viewport with no
+approved snapshot has no approved findings — everything measured there counts as new, and the
+verdict says `No approved accessibility snapshot exists for <viewport>` rather than borrowing
+another viewport's approval. The same rule makes a bundle honest: an approval without a snapshot
+never becomes one.
+
 ### Portable approved baselines
 
 The store is runtime state — git-ignored, container-ephemeral, absent on a fresh CI runner. A
@@ -638,6 +663,13 @@ enforces, each of them unit tested against hand-edited manifests:
   import activates the version that is already on the machine.
 - **Reports stay out of bundles.** A bundle carries approvals, never results: the report of the run
   that produced an image stays in the store.
+- **Accessibility snapshots travel with them.** When the approved run measured the page, the bundle
+  carries the snapshot — scanner version, approval time, the violation fingerprints and their count
+  — and an import restores it, so a clean checkout classifies `--new-only` exactly as the machine
+  that approved did. The snapshot is validated strictly on the way in (unknown fields, unsorted or
+  duplicated fingerprints and a count that disagrees with the list are all refused), a version with
+  no snapshot imports with no reference rather than an empty one, and bundles written before this
+  existed keep working unchanged.
 
 ### Gating a CI pipeline
 
@@ -674,6 +706,25 @@ Phase 4 walkthrough, kept as an integration test and clearly separated from the 
 documented exit code — `0` unchanged, `1` changed, `0` restored, `2` missing baseline, `2` tampered
 image, `2` unreachable application — which is precisely what a gate must never do. It runs on `main`
 and by hand, in the same pinned image, and its last step fails if it left the checkout dirty.
+
+[.github/workflows/quality-gate.yml](.github/workflows/quality-gate.yml) is the accessibility and
+layout gate, and it is built the same way: `pull_request` and `push` to `main`, `contents: read`, no
+secrets, the same pinned image. `scripts/ci/audit-gate.sh` audits the registered `/support` route at
+every viewport with the documented policy (`--fail-on serious`, best-practice rules counted, the
+CLI's own overflow limits) and maps the audit's exit code onto the job — `0` passes, `1` (a policy
+failure) fails, `2` (axe-core could not be injected, Chromium failed, the store failed) fails as
+infrastructure. It never approves anything, and it refuses `--new-only` unless a trusted bundle
+actually imported an accessibility reference in that run, so the flag can never appear to compare
+against a reference that does not exist.
+
+The checker is not the pull request's code. `scripts/ci/trusted-checker.sh` extracts `src/`,
+`scripts/` and the registration file from the base branch with `git archive` and the gate runs from
+that copy (`UIPROOF_CLI_DIR`), so the policy engine, the scanner wrapper and the gate script itself
+are the protected revision's. The application under test is still the pull request's working tree —
+that is what is being reviewed — started with a scrubbed environment, and the installed
+dependencies are still the revision under test's, which is written down rather than implied.
+[docs/BRANCH-PROTECTION.md](docs/BRANCH-PROTECTION.md) records the branch-protection and CODEOWNERS
+settings that make both gates block, and exactly what remains outside the trust boundary.
 
 Updating the baseline is its own reviewed procedure: dispatch
 [the update workflow](.github/workflows/baseline-update.yml), review the artifact and its provenance,
@@ -758,7 +809,7 @@ typecheck, unit tests, production build, Chromium install, browser suite.
 
 ## Testing
 
-`pnpm test` runs **223 unit tests** across 19 files, all covering the engine, the guards, the baseline
+`pnpm test` runs **238 unit tests** across 19 files, all covering the engine, the guards, the baseline
 store, the portable bundles, the quality measurements, the CLI's parser and the pinned CI environment
 rather than the UI shell:
 
@@ -780,8 +831,8 @@ rather than the UI shell:
 | `cli/args.test.ts`              | The CLI's argument parser: commands and subcommands, value and boolean flags, `--tolerance` bounds, unknown options, `--help` winning over a missing option, and the documented exit codes in the help text |
 | `lib/ci/pinned-environment.test.ts` | The CI configuration itself: the Playwright pin is exact and matches the image tag, the image is pinned by tag *and* digest, every workflow runs in that same image, the recorded Chromium revision matches the installed Playwright, the gate workflow contains no `capture` and no `--approve` and reads a base-branch ref, and no workflow-level `env` reaches for a context GitHub does not allow there |
 | `cli/portable.test.ts`          | Portable bundles, treated as hostile input: canonical paths and traversal refusal, hand-edited manifests (wrong format, unknown scope, unknown viewport, non-canonical file, malformed hash, duplicate id, an active version that is not listed), import into a store that does not exist yet, idempotent re-import, activation only on request, a tampered image writing nothing, a version-id conflict keeping the approved bytes, export refusing to rewrite a bundled image |
-| `lib/quality/fingerprint.test.ts` | The stable identity behind "new findings": `rule@selector`, identical across rescans and insensitive to whitespace reflow, with distinct rules or elements never collapsing into one; violation sets deduplicate and sort, and the diff of two snapshots separates added, known and resolved regardless of order |
-| `lib/quality/policy.test.ts`    | The policy's arithmetic: each `--fail-on` band fails on exactly its impact and above (an unstated impact fails rather than being presumed harmless), `none` reports everything and fails nothing, best-practice rules leave the verdict when excluded, `--new-only` counts only findings absent from the reference and falls back to counting everything with a note when there is no trustworthy one, document overflow fails above its pixel limit, and the description names every threshold |
+| `lib/quality/fingerprint.test.ts` | The stable identity behind "new findings": `rule@selector`, identical across rescans and insensitive to whitespace reflow, with distinct rules or elements never collapsing into one; violation sets deduplicate and sort, and the diff of two snapshots separates added, known and resolved regardless of order. Also the snapshot parser behind every imported approval: accepted unchanged, refused when it carries unknown fields, a blank scanner version, an unparseable approval time, a non-array or unsorted or duplicated fingerprint list, a fingerprint that is not `<rule>@<selector>`, or a count that disagrees with the list — and the complete-index reader falls back to the display list only for reports written before the index existed |
+| `lib/quality/policy.test.ts`    | The policy's arithmetic: each `--fail-on` band fails on exactly its impact and above (an unstated impact fails rather than being presumed harmless), `none` reports everything and fails nothing, best-practice rules leave the verdict when excluded, `--new-only` counts only findings absent from the reference and falls back to counting everything with a note when there is no trustworthy one, document overflow fails above its pixel limit, and the description names every threshold. Phase 5.1 additions: the verdict reads the complete violation index rather than the capped display list (a serious finding only present in the index still fails, and the truncation is noted), responsive defects are read the same way, a desktop approval counts a fingerprint as new when the mobile reference lacks it, and new/known/resolved are classified per viewport under partial baseline coverage |
 | `lib/quality/presentation.test.ts` | The dashboard's view of an audit, kept pure: violations grouped by impact with empty bands omitted and unstated impact last, one finding seen at several viewports deduplicated with the viewports recorded, needs-review results kept apart from violations whatever their impact says, and both panel models carrying measurements, evidence and engine facts through unchanged |
 
 `diff.test.ts` is the important one: it builds synthetic PNGs in memory and asserts **exact** pixel
@@ -794,7 +845,7 @@ would look, and asserts that every one of them is refused.
 
 ### Browser suite
 
-`pnpm test:e2e` runs **58 tests** across 7 files in real Chromium, against a real `next start` server
+`pnpm test:e2e` runs **62 tests** across 8 files in real Chromium, against a real `next start` server
 on a throwaway data directory ([e2e/](e2e)):
 
 | File | Coverage |
@@ -805,6 +856,7 @@ on a throwaway data directory ([e2e/](e2e)):
 | `project-integration.test.ts` | The Phase 3 workflow against an independent application: start it, register it, capture a route, approve it, change the application's real UI, detect the regression, restore it, pass again, restart UIProof and find everything still there — plus the refusals |
 | `cli.test.ts` | The Phase 4 workflow through the real CLI process (`node scripts/uiproof.mjs …`, exit codes read from the process): help and version, usage errors, `projects`, a missing baseline, `capture --approve` reporting *captured* and never a pass, a passing `check` whose JSON equals the persisted report, a real UI change exiting `1` and recovering to `0`, unknown project/route/viewport, an off-origin redirect, an unreachable application, export/import on a fresh working directory, activation only on request, a tampered bundle, and `baselines status` naming the approved run |
 | `quality.test.ts` | The quality gate's seven demonstration points through the real CLI: a clean page passing at every viewport with the deliberate scroller recorded as evidence, a missing and an incorrect accessible name detected with structured evidence, a contrast failure reported with its measured ratio while an undecidable one stays a question, mobile-only overflow detected, restore naming what it resolved, screenshot baselines untouched by failing audits, and the documented exit code for each policy |
+| `quality-hardening.test.ts` | The three ways a quality gate can silently pass, each measured on the live page: 68 findings against a 60-finding display cap where the only serious violation sorts *past* the cap (the truncated list contains nothing severe, the verdict fails on it anyway and the note says all 68 were evaluated); a desktop-only approval that leaves the same fingerprints new at mobile and tablet while the desktop-only `--new-only` audit passes; those snapshots surviving export → wiped store → import with an identical classification; and a CSP page that blocks axe-core's injection answering exit `2` with `quality_unavailable` and nothing persisted |
 | `quality-api.test.ts` | The audit HTTP API against a registered application: a clean audit with working evidence links (per-viewport PNGs and `audit.json`), a real code change producing findings by impact and layout defects only at the narrow viewport, the history listing newest first with summaries that match their reports, and the refusals — cross-site requests, unknown projects, bad policy and viewport input, path traversal on the evidence route |
 
 The lifecycle, in the order the suite checks it:
@@ -976,7 +1028,9 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
   in one browser, at one moment, with the runner's version in the report. `needs-review` results are
   exactly what the runner could not decide — they need a human and are never counted as failures.
 - **"New findings" need an approved reference.** Without an approved baseline's accessibility
-  snapshot the audit cannot say which findings are new; the report says so rather than guessing.
+  snapshot the audit cannot say which findings are new; the report says so rather than guessing. An
+  approval is per viewport, so a desktop-only approval leaves the tablet and mobile findings
+  unapproved — the verdict names those viewports rather than borrowing the desktop reference.
 - **No auth, no multi-tenancy, no queue.** Concurrent runs share one Chromium and are not queued.
   Baseline writes are therefore guarded by local-only rules plus the concurrency handling described
   above, not by identities or roles.
@@ -997,9 +1051,20 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
   Chromium build differ across machines, which is why the gate, the walkthrough and the generator all
   run in one pinned image: the committed bundle is reproducible there (four runs, one image hash) and
   nowhere else by assumption. A different digest or architecture means regenerating the baseline.
-- **The gate blocks only if the repository says so.** Requiring the `gate · trusted baseline` check,
-  requiring code-owner review, keeping branches up to date and restricting pushes to the base branch
-  are manual GitHub settings — a workflow cannot protect itself. Without them the gate is a signal.
+- **The gates block only if the repository says so.** Requiring the `gate · trusted baseline` and
+  `gate · accessibility and layout` checks, requiring code-owner review, keeping branches up to date
+  and restricting pushes to the base branch are manual GitHub settings — a workflow cannot protect
+  itself. Without them both gates are signals. [docs/BRANCH-PROTECTION.md](docs/BRANCH-PROTECTION.md)
+  lists exactly what to configure and what each setting buys.
+- **The quality gate trusts the checker, not the dependencies.** The implementation that judges a
+  pull request (`src/`, `scripts/ci/`, the registration file) is extracted from the base branch, but
+  the extracted copy borrows the workspace's `node_modules`, installed from the pull request's
+  lockfile. A dependency change is therefore still inside the trust boundary; CODEOWNERS routes
+  `package.json` and `pnpm-lock.yaml` to review, and a fully hermetic answer — installing the base
+  revision's lockfile separately — is the next step, not a claim this phase makes.
+- **The quality gate audits one route at every preset.** It audits the registered support route at
+  desktop, tablet and mobile in one invocation because `audit` measures every preset by default;
+  gating several pages is a loop over `scripts/ci/audit-gate.sh` in your own workflow.
 - **One route, one viewport per gate invocation.** Gating several routes is a loop over
   `scripts/ci/run-gate.sh` in your own workflow.
 - **The CLI captures registered routes only.** `--project` and `--route` must exist in the registration

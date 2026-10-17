@@ -19,7 +19,7 @@ import { decodePng } from "./diff";
 import { ComparisonError } from "./errors";
 import { LockTimeoutError, withFileLock } from "./file-lock";
 import { sha256Hex, verifyImageIntegrity } from "./integrity";
-import { fingerprintViolations } from "@/lib/quality/fingerprint";
+import { parseAccessibilitySnapshot, snapshotOfSummary } from "@/lib/quality/fingerprint";
 import { readArtifact, readReport, scopeKeyOf } from "./storage";
 import { getTarget, getViewport } from "./targets";
 import type { BaselineManifest, BaselineReference, BaselineScope, BaselineVersion, ViewportPreset } from "./types";
@@ -376,18 +376,10 @@ export async function approveBaseline(input: ApproveBaselineInput): Promise<Appr
     imageUrl: baselineImageUrl(scope, viewport.id, versionId),
     // Phase 5: what the page's accessibility looked like at the moment of approval, so a
     // later audit can say which violations are new. Recorded only when the approved run
-    // measured it; approving never runs a scan of its own.
-    quality: report.quality
-      ? (() => {
-          const fingerprints = fingerprintViolations(report.quality!.accessibility.findings);
-          return {
-            runnerVersion: report.quality!.accessibility.runner.version,
-            approvedAt,
-            fingerprints,
-            violationCount: fingerprints.length,
-          };
-        })()
-      : undefined,
+    // measured it; approving never runs a scan of its own. The snapshot is taken from the
+    // complete violation index, never the capped display list — an approval that dropped
+    // findings past the report limit would authorise them on every later run.
+    quality: report.quality ? snapshotOfSummary(report.quality.accessibility, approvedAt) : undefined,
   };
 
   const versionPath = resolveBaselineVersionPath(scope, viewport.id, versionId);
@@ -590,6 +582,13 @@ export interface ImportBaselineVersionInput {
   readonly origin?: string | null;
   readonly targetLabel?: string | null;
   readonly activate?: boolean;
+  /**
+   * Accessibility snapshot the bundle carried for this version, or `null`/absent when it
+   * carried none. Re-validated here: an imported approval is a trust anchor, so a
+   * malformed snapshot is refused rather than written. Absent never becomes "no
+   * violations" — the version simply has no accessibility reference.
+   */
+  readonly quality?: unknown;
   /** Store directory; the default is the resolved `UIPROOF_DATA_DIR`. */
   readonly cwd?: string;
 }
@@ -615,6 +614,19 @@ export async function importBaselineVersion(input: ImportBaselineVersionInput): 
   const versionPath = resolveBaselineVersionPath(scope, viewport.id, versionId, input.cwd);
 
   const size = verifyImageIntegrity(input.png, { sha256: input.expectedSha256 }, `${versionId} of ${label}`);
+
+  let quality: BaselineVersion["quality"];
+  if (input.quality !== undefined && input.quality !== null) {
+    try {
+      quality = parseAccessibilitySnapshot(input.quality);
+    } catch (cause) {
+      throw new ComparisonError(
+        "portable_bundle_invalid",
+        `The accessibility snapshot for ${versionId} of ${label} is unusable: ${(cause as Error).message}`,
+        { cause },
+      );
+    }
+  }
 
   const existing = await readBaselineManifest(scope, viewport.id, input.cwd);
   const duplicate = existing?.versions.find((version) => version.id === versionId);
@@ -679,6 +691,7 @@ export async function importBaselineVersion(input: ImportBaselineVersionInput): 
     bytes: input.png.byteLength,
     note: input.note ?? null,
     imageUrl: baselineImageUrl(scope, viewport.id, versionId),
+    ...(quality ? { quality } : {}),
   };
 
   try {

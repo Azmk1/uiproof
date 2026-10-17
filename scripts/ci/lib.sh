@@ -112,8 +112,17 @@ ci_sha256() {
 # The CLI, run from source: the same entry point `pnpm uiproof` spawns, without pnpm's own
 # banner on stdout — `--json` promises that stdout is exactly one JSON document, and a gate
 # that parses it should not have to guess.
+#
+# `UIPROOF_CLI_DIR` points the calls at an *extracted* copy of the checker — the base
+# revision's `scripts/` and `src/`, produced by `trusted-checker.sh` — so the gate's
+# implementation is not the code under review. Unset (every other caller) and this runs the
+# working tree exactly as before.
 ci_uiproof() {
-  node scripts/uiproof.mjs "$@"
+  if [ -n "${UIPROOF_CLI_DIR:-}" ]; then
+    node "$UIPROOF_CLI_DIR/scripts/uiproof.mjs" "$@"
+  else
+    node scripts/uiproof.mjs "$@"
+  fi
 }
 
 # Reads a dotted path out of a JSON file. Empty output means "absent".

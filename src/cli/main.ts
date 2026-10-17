@@ -318,6 +318,11 @@ export async function runAudit(parsed: ParsedArgs, io: CliOutput): Promise<CliEx
     for (const finding of accessibility.findings) {
       for (const line of auditFindingLines(finding)) io.note(line);
     }
+    if (accessibility.truncated) {
+      io.note(
+        `  (showing ${accessibility.findings.length} of ${accessibility.totalFindings} findings; the verdict evaluated all ${accessibility.totalFindings})`,
+      );
+    }
     io.note(
       `  responsive — document scrolls ${responsive.documentOverflowPx}px horizontally`,
     );
@@ -326,6 +331,11 @@ export async function runAudit(parsed: ParsedArgs, io: CliOutput): Promise<CliEx
         `    ${finding.selector} escapes the viewport by ${finding.overflowPx}px (${finding.kind})`,
       );
       if (finding.html) io.note(`        ${finding.html}`);
+    }
+    if (responsive.truncated) {
+      io.note(
+        `  (showing ${responsive.findings.length} of ${responsive.defects.length} layout defects; the verdict evaluated all ${responsive.defects.length})`,
+      );
     }
     for (const finding of responsive.contained) {
       io.note(
@@ -345,6 +355,15 @@ export async function runAudit(parsed: ParsedArgs, io: CliOutput): Promise<CliEx
     io.note(
       `Reference: ${report.references.map((reference) => `${reference.versionId} (${reference.viewportId})`).join(", ")}`,
     );
+    const covered = new Set(report.references.map((reference) => reference.viewportId));
+    const uncovered = report.viewports
+      .map((viewport) => viewport.viewport.id)
+      .filter((viewportId) => !covered.has(viewportId));
+    if (uncovered.length > 0) {
+      io.note(
+        `  no approved accessibility snapshot for ${uncovered.join(", ")} — findings measured there count as new.`,
+      );
+    }
     io.note(
       `  new ${report.newFindingFingerprints.length}, known ${report.knownFindingFingerprints.length}, ` +
         `resolved ${report.resolvedFindingFingerprints.length}`,
@@ -521,6 +540,11 @@ export async function runBaselinesImport(parsed: ParsedArgs, io: CliOutput, view
         `${entry.activeVersionId ? `active ${entry.activeVersionId}` : "nothing active"}`,
     );
   }
+  io.note(
+    result.accessibilitySnapshots > 0
+      ? `${result.accessibilitySnapshots} version(s) carried an accessibility snapshot; --new-only can now compare against them.`
+      : "No version in this bundle carries an accessibility snapshot, so audits here still treat every finding as new.",
+  );
   if (result.added > 0 && !parsed.activate) {
     io.note("Imported versions are stored but not active. Pass --activate to make the bundle's baseline the reference.");
   }
@@ -532,6 +556,7 @@ export async function runBaselinesImport(parsed: ParsedArgs, io: CliOutput, view
     activated: parsed.activate,
     added: result.added,
     alreadyPresent: result.alreadyPresent,
+    accessibilitySnapshots: result.accessibilitySnapshots,
     scopes: result.scopes.map((entry) => ({
       scope: entry.scope,
       scopeKey: scopeKey(entry.scope),

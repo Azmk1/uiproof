@@ -6,7 +6,7 @@ import { baselineScopeOf, resolveRun, type ResolvedRun } from "@/lib/compare/run
 import { VIEWPORT_PRESETS, getViewport } from "@/lib/compare/targets";
 import { buildProjectCaptureUrl } from "@/lib/projects/registry";
 import { AXE_RULE_SETS, AXE_VERSION, scanAccessibility } from "./axe";
-import { fingerprintViolations, snapshotOf } from "./fingerprint";
+import { fingerprintViolations, snapshotOfSummary } from "./fingerprint";
 import { DEFAULT_QUALITY_POLICY, evaluateQualityPolicy, parseQualityPolicy } from "./policy";
 import { measureResponsive } from "./responsive";
 import { auditScreenshotUrl, persistAudit } from "./storage";
@@ -38,8 +38,10 @@ import type { RegisteredProject, ViewportPreset } from "@/lib/compare/types";
  *  · **"New" means "new since an approved reference", or nothing.** The fingerprint sets a
  *    run is compared against come from the *approved baseline versions* of the same scope
  *    and viewport — the same trust anchor the visual gate uses — never from "the previous
- *    run", which nobody approved. With no approved reference the report says so and the
- *    policy counts every finding.
+ *    run", which nobody approved. A reference is matched to the viewport it was approved
+ *    for, never to whichever viewports happen to be audited now: an approval made at
+ *    desktop says nothing about the mobile rendering. With no approved reference the
+ *    report says so and the policy counts every finding.
  *
  * Responsive and accessibility results are kept apart from visual metrics everywhere: this
  * module never computes pixel differences and never writes to the visual baseline store.
@@ -159,14 +161,20 @@ export function judgeMeasurements(input: {
   }[];
   readonly references: readonly QualityReference[];
 }): QualityVerdictSummary {
-  const referenceFingerprints = input.references.length === 0
-    ? null
-    : [...new Set(input.references.flatMap((reference) => reference.fingerprints))].sort();
+  // Each reference authorises exactly one viewport: the one it was approved for. A
+  // fingerprint approved at desktop is not an approval at tablet or mobile, where axe can
+  // legitimately report a different result for the same page.
+  const referencesByViewport = new Map<string, QualityReference>();
+  for (const reference of input.references) {
+    if (!referencesByViewport.has(reference.viewportId)) {
+      referencesByViewport.set(reference.viewportId, reference);
+    }
+  }
 
   const evaluated = evaluateQualityPolicy({
     policy: input.policy,
     viewports: input.viewports,
-    referenceFingerprints,
+    referencesByViewport: referencesByViewport.size === 0 ? null : referencesByViewport,
   });
 
   return {
@@ -336,7 +344,9 @@ export async function runQualityAudit(options: RunQualityAuditOptions): Promise<
 
 /** The fingerprint set an approval of this run would record — used by baseline approval. */
 export function snapshotFromSection(section: QualitySection, approvedAt: string) {
-  return snapshotOf(section.accessibility.findings, section.accessibility.runner.version, approvedAt);
+  // The complete index, not the capped display list: an approval that silently dropped
+  // findings past the report limit would authorise them on every later run.
+  return snapshotOfSummary(section.accessibility, approvedAt);
 }
 
 export { fingerprintViolations };

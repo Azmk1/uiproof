@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { diffFingerprints, fingerprintFinding, fingerprintViolations, snapshotOf } from "./fingerprint";
-import type { AccessibilityFinding } from "./types";
+import {
+  completeViolationFingerprints,
+  diffFingerprints,
+  fingerprintFinding,
+  fingerprintViolations,
+  parseAccessibilitySnapshot,
+  snapshotOf,
+  snapshotOfSummary,
+} from "./fingerprint";
+import type { AccessibilityFinding, AccessibilitySummary } from "./types";
 
 function finding(overrides: Partial<AccessibilityFinding> = {}): AccessibilityFinding {
   const base: AccessibilityFinding = {
@@ -102,3 +110,88 @@ describe("snapshotOf", () => {
     expect(snapshot.violationCount).toBe(2);
   });
 });
+
+function summaryWith(overrides: Partial<AccessibilitySummary>): AccessibilitySummary {
+  return {
+    runner: { name: "axe-core", version: "4.14.0", rulesEvaluated: 10, ruleSets: ["wcag2a"], nodeResults: 12 },
+    counts: { minor: 0, moderate: 0, serious: 0, critical: 0, unknown: 0 },
+    needsReview: 0,
+    bestPracticeViolations: 0,
+    findings: [],
+    violations: [],
+    truncated: false,
+    totalFindings: 0,
+    skippedResults: 0,
+    ...overrides,
+  };
+}
+
+describe("completeViolationFingerprints", () => {
+  it("reads the complete index, so a display cap cannot shrink an approval", () => {
+    const summary = summaryWith({
+      findings: [finding({ rule: "region", selector: "footer" })],
+      violations: [
+        { fingerprint: "region@footer", impact: "minor", wcag: false },
+        { fingerprint: "label@#email", impact: "critical", wcag: true },
+      ],
+      truncated: true,
+      totalFindings: 75,
+    });
+    expect(completeViolationFingerprints(summary)).toEqual(["label@#email", "region@footer"]);
+  });
+
+  it("falls back to the display list only for reports written before the index existed", () => {
+    const legacy = summaryWith({ findings: [finding()] });
+    delete (legacy as { violations?: unknown }).violations;
+    expect(completeViolationFingerprints(legacy)).toEqual(["button-name@main > button.save"]);
+  });
+
+  it("approves from the complete index", () => {
+    const summary = summaryWith({
+      violations: [{ fingerprint: "label@#email", impact: "critical", wcag: true }],
+      totalFindings: 1,
+    });
+    const snapshot = snapshotOfSummary(summary, "2026-10-15T00:00:00.000Z");
+    expect(snapshot.fingerprints).toEqual(["label@#email"]);
+    expect(snapshot.violationCount).toBe(1);
+  });
+});
+
+describe("parseAccessibilitySnapshot", () => {
+  const valid = {
+    runnerVersion: "4.14.0",
+    approvedAt: "2026-10-15T00:00:00.000Z",
+    fingerprints: ["label@#email", "region@footer"],
+    violationCount: 2,
+  };
+
+  it("accepts a well-formed snapshot and returns it unchanged", () => {
+    expect(parseAccessibilitySnapshot(valid)).toEqual(valid);
+    expect(parseAccessibilitySnapshot({ ...valid, fingerprints: [], violationCount: 0 })).toEqual({
+      ...valid,
+      fingerprints: [],
+      violationCount: 0,
+    });
+  });
+
+  it("refuses anything that would make an approval ambiguous", () => {
+    for (const bad of [null, [], "snapshot", 42]) {
+      expect(() => parseAccessibilitySnapshot(bad), String(bad)).toThrow(/JSON object/);
+    }
+    expect(() => parseAccessibilitySnapshot({ ...valid, extra: 1 })).toThrow(/unknown accessibility snapshot field/);
+    expect(() => parseAccessibilitySnapshot({ ...valid, runnerVersion: "" })).toThrow(/runnerVersion/);
+    expect(() => parseAccessibilitySnapshot({ ...valid, approvedAt: "yesterday" })).toThrow(/approvedAt/);
+    expect(() => parseAccessibilitySnapshot({ ...valid, fingerprints: "label@#email" })).toThrow(/array/);
+    expect(() => parseAccessibilitySnapshot({ ...valid, fingerprints: ["label@#email", "label@#email"] })).toThrow(/more than once/);
+    expect(() => parseAccessibilitySnapshot({ ...valid, fingerprints: ["region@footer", "label@#email"] })).toThrow(/sorted order/);
+    expect(() => parseAccessibilitySnapshot({ ...valid, fingerprints: ["no-at-sign"] })).toThrow(/fingerprint/);
+    expect(() => parseAccessibilitySnapshot({ ...valid, violationCount: 1 })).toThrow(/claims 1 violation/);
+    expect(() => parseAccessibilitySnapshot({ ...valid, violationCount: -1 })).toThrow(/violationCount/);
+  });
+
+  it("round-trips a snapshot through JSON", () => {
+    const snapshot = snapshotOf([finding()], "4.14.0", "2026-10-15T00:00:00.000Z");
+    expect(parseAccessibilitySnapshot(JSON.parse(JSON.stringify(snapshot)))).toEqual(snapshot);
+  });
+});
+

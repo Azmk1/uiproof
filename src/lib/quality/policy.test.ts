@@ -5,6 +5,7 @@ import type {
   AccessibilityFinding,
   AccessibilitySummary,
   QualityPolicy,
+  QualityReference,
   ResponsiveFinding,
   ResponsiveSummary,
 } from "./types";
@@ -40,10 +41,32 @@ function summary(findings: readonly AccessibilityFinding[]): AccessibilitySummar
     needsReview,
     bestPracticeViolations: findings.filter((f) => f.status === "violation" && f.wcagTags.length === 0).length,
     findings,
+    violations: findings
+      .filter((finding) => finding.status === "violation")
+      .map((finding) => ({
+        fingerprint: finding.fingerprint,
+        impact: finding.impact,
+        wcag: finding.wcagTags.length > 0,
+      })),
     truncated: false,
     totalFindings: findings.length,
     skippedResults: 0,
   };
+}
+
+function reference(viewportId: string, fingerprints: readonly string[]): QualityReference {
+  return {
+    viewportId,
+    versionId: `bl-${viewportId}`,
+    approvedAt: "2026-01-01T00:00:00.000Z",
+    runnerVersion: "4.14.0",
+    fingerprints,
+    violationCount: fingerprints.length,
+  };
+}
+
+function referencesByViewport(...references: QualityReference[]): ReadonlyMap<string, QualityReference> {
+  return new Map(references.map((entry) => [entry.viewportId, entry]));
 }
 
 function responsiveFinding(selector: string, overflowPx: number): ResponsiveFinding {
@@ -71,6 +94,12 @@ function responsive(overrides: Partial<ResponsiveSummary> = {}): ResponsiveSumma
     truncated: false,
     elementsMeasured: 30,
     ...overrides,
+    // The complete defect index is the input a policy reads; keep it in step with the
+    // readable list unless a test deliberately overrides it.
+    defects: overrides.defects ?? (overrides.findings ?? []).map((finding) => ({
+      selector: finding.selector,
+      overflowPx: finding.overflowPx,
+    })),
   };
 }
 
@@ -79,7 +108,8 @@ function judge(
   findings: readonly AccessibilityFinding[],
   extra: {
     readonly responsive?: ResponsiveSummary[];
-    readonly referenceFingerprints?: readonly string[] | null;
+    readonly references?: ReadonlyMap<string, QualityReference> | null;
+    readonly accessibility?: AccessibilitySummary[];
   } = {},
 ) {
   return evaluateQualityPolicy({
@@ -87,16 +117,16 @@ function judge(
     viewports: [
       {
         viewportId: "desktop",
-        accessibility: summary(findings),
+        accessibility: extra.accessibility?.[0] ?? summary(findings),
         responsive: extra.responsive?.[0] ?? responsive({ viewportId: "desktop", viewportWidth: 1280 }),
       },
-      ...(extra.responsive ?? []).slice(1).map((entry) => ({
+      ...(extra.responsive ?? []).slice(1).map((entry, index) => ({
         viewportId: entry.viewportId,
-        accessibility: summary([]),
+        accessibility: extra.accessibility?.[index + 1] ?? summary([]),
         responsive: entry,
       })),
     ],
-    referenceFingerprints: extra.referenceFingerprints === undefined ? null : extra.referenceFingerprints,
+    referencesByViewport: extra.references === undefined ? null : extra.references,
   });
 }
 
@@ -176,7 +206,7 @@ describe("evaluateQualityPolicy", () => {
         { viewportId: "desktop", accessibility: summary([seriousFinding]), responsive: responsive() },
         { viewportId: "mobile", accessibility: summary([seriousFinding]), responsive: responsive() },
       ],
-      referenceFingerprints: null,
+      referencesByViewport: null,
     });
     expect(result.verdict.failures).toHaveLength(1);
     expect(result.verdict.failures[0].count).toBe(1);
@@ -214,7 +244,7 @@ describe("evaluateQualityPolicy", () => {
   it("failOnNewOnly counts only findings absent from the reference", () => {
     const known = fingerprintFinding({ rule: "label", selector: "#email" });
     const result = judge({ failOn: "critical", failOnNewOnly: true }, [criticalFinding, seriousFinding], {
-      referenceFingerprints: [known],
+      references: referencesByViewport(reference("desktop", [known])),
     });
     // critical is known → counted out; serious is new but below the critical threshold.
     expect(result.verdict.status).toBe("pass");
@@ -224,7 +254,7 @@ describe("evaluateQualityPolicy", () => {
 
   it("failOnNewOnly without a trustworthy reference counts everything and says so", () => {
     const result = judge({ failOn: "critical", failOnNewOnly: true }, [criticalFinding], {
-      referenceFingerprints: null,
+      references: null,
     });
     expect(result.verdict.status).toBe("fail");
     expect(result.verdict.notes.join(" ")).toContain("no approved baseline");
@@ -232,11 +262,92 @@ describe("evaluateQualityPolicy", () => {
 
   it("distinguishes new, known and resolved against a reference", () => {
     const result = judge({ failOn: "none" }, [criticalFinding], {
-      referenceFingerprints: ["label@#email", "link-name@#gone"],
+      references: referencesByViewport(reference("desktop", ["label@#email", "link-name@#gone"])),
     });
     expect(result.newFindingFingerprints).toEqual([]);
     expect(result.knownFindingFingerprints).toEqual(["label@#email"]);
     expect(result.resolvedFindingFingerprints).toEqual(["link-name@#gone"]);
+  });
+
+  it("evaluates the complete violation index, not the capped display list", () => {
+    // 61 violations were measured, only the first were carried for display, and the
+    // serious one exists only in the complete index. The verdict must still see it.
+    const complete = summary([seriousFinding]);
+    const capped: AccessibilitySummary = {
+      ...complete,
+      findings: [],
+      violations: [{ fingerprint: "button-name@#save", impact: "serious", wcag: true }],
+      truncated: true,
+      totalFindings: 61,
+    };
+    const result = evaluateQualityPolicy({
+      policy: DEFAULT_QUALITY_POLICY,
+      viewports: [{ viewportId: "desktop", accessibility: capped, responsive: responsive() }],
+      referencesByViewport: null,
+    });
+    expect(result.verdict.status).toBe("fail");
+    expect(result.verdict.failures[0].evidence).toEqual(["button-name@#save"]);
+    expect(result.verdict.notes.join(" ")).toContain("61");
+  });
+
+  it("reads the complete responsive defect index, not the capped list", () => {
+    const truncatedResponsive = responsive({
+      findings: [],
+      defects: [{ selector: "main > .hero", overflowPx: 140 }],
+      truncated: true,
+    });
+    const result = judge({ failOn: "none" }, [], { responsive: [truncatedResponsive] });
+    expect(result.verdict.status).toBe("fail");
+    expect(result.verdict.failures[0].evidence).toEqual(["main > .hero"]);
+  });
+
+  it("never lets a desktop approval authorise the same finding on mobile", () => {
+    const fingerprint = criticalFinding.fingerprint;
+    const result = judge({ failOn: "critical", failOnNewOnly: true }, [], {
+      references: referencesByViewport(reference("desktop", [fingerprint])),
+      responsive: [responsive({ viewportId: "desktop", viewportWidth: 1280 }), responsive({ viewportId: "mobile" })],
+      accessibility: [summary([criticalFinding]), summary([criticalFinding])],
+    });
+    expect(result.newFindingFingerprints).toEqual([fingerprint]);
+    expect(result.knownFindingFingerprints).toEqual([]);
+    expect(result.verdict.status).toBe("fail");
+    expect(result.verdict.notes.join(" ")).toContain("No approved accessibility snapshot exists for mobile");
+  });
+
+  it("classifies new, known and resolved per viewport with partial baseline coverage", () => {
+    const desktopKnown = violation("label", "#email", "critical");
+    const desktopNew = violation("button-name", "#save", "serious");
+    const mobileKnown = violation("color-contrast", ".cta", "serious");
+    const mobileNew = violation("link-name", ".more", "serious");
+    const result = evaluateQualityPolicy({
+      policy: { ...DEFAULT_QUALITY_POLICY, failOn: "none" },
+      viewports: [
+        { viewportId: "desktop", accessibility: summary([desktopKnown, desktopNew]), responsive: responsive() },
+        { viewportId: "mobile", accessibility: summary([mobileKnown, mobileNew]), responsive: responsive() },
+      ],
+      referencesByViewport: referencesByViewport(
+        reference("desktop", [desktopKnown.fingerprint, "link-name@#gone-desktop"]),
+        reference("mobile", [mobileKnown.fingerprint, "region@aside"]),
+      ),
+    });
+    expect(result.newFindingFingerprints).toEqual([desktopNew.fingerprint, mobileNew.fingerprint].sort());
+    expect(result.knownFindingFingerprints).toEqual([desktopKnown.fingerprint, mobileKnown.fingerprint].sort());
+    expect(result.resolvedFindingFingerprints).toEqual(["link-name@#gone-desktop", "region@aside"]);
+  });
+
+  it("counts a fingerprint as new when any audited viewport lacks approval for it", () => {
+    const shared = violation("color-contrast", ".cta", "serious");
+    const result = evaluateQualityPolicy({
+      policy: { ...DEFAULT_QUALITY_POLICY, failOn: "serious", failOnNewOnly: true },
+      viewports: [
+        { viewportId: "desktop", accessibility: summary([shared]), responsive: responsive() },
+        { viewportId: "mobile", accessibility: summary([shared]), responsive: responsive() },
+      ],
+      referencesByViewport: referencesByViewport(reference("desktop", [shared.fingerprint])),
+    });
+    expect(result.newFindingFingerprints).toEqual([shared.fingerprint]);
+    expect(result.knownFindingFingerprints).toEqual([]);
+    expect(result.verdict.status).toBe("fail");
   });
 });
 

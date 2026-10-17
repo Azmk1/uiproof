@@ -38,6 +38,21 @@ const VIEWS = {
   "/pricing": "views/pricing.html",
   "/embedded": "views/embedded.html",
   "/support": "views/quality.html",
+  // The stress fixture: 66 findings, more than the report's display cap, with the serious
+  // one sorted past it. Used by the quality walkthrough to prove a truncated report cannot
+  // hide a serious violation from the verdict.
+  "/support-flood": "views/quality.flood.html",
+  // The scanner-unavailable fixture: the same clean page, but the CSP header below makes
+  // axe-core's inline injection impossible, so an audit must fail as infrastructure (exit 2).
+  "/support-csp": "views/quality.csp.html",
+};
+
+/**
+ * Extra response headers, per route. `script-src 'self'` blocks inline scripts, which is
+ * exactly where axe-core is injected: the page renders fine, and the scan cannot run.
+ */
+const HEADERS = {
+  "/support-csp": { "content-security-policy": "script-src 'self'" },
 };
 
 const ASSETS = {
@@ -49,12 +64,13 @@ const REDIRECTS = {
   "/moved": "https://example.com/",
 };
 
-function send(response, status, body, contentType = "text/html; charset=utf-8") {
+function send(response, status, body, contentType = "text/html; charset=utf-8", extraHeaders = {}) {
   response.writeHead(status, {
     "content-type": contentType,
     "content-length": Buffer.byteLength(body),
     // No caching anywhere: a capture must see the page as it is right now.
     "cache-control": "no-store",
+    ...extraHeaders,
   });
   response.end(body);
 }
@@ -77,7 +93,7 @@ const server = createServer(async (request, response) => {
     const view = VIEWS[pathname];
     if (view) {
       // Read per request: editing a view is a change to what this app renders.
-      return send(response, 200, await readFile(path.join(root, view), "utf8"));
+      return send(response, 200, await readFile(path.join(root, view), "utf8"), "text/html; charset=utf-8", HEADERS[pathname] ?? {});
     }
 
     const assetType = ASSETS[pathname];

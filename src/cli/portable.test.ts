@@ -9,6 +9,7 @@ import {
   resolveBaselineVersionPath,
 } from "@/lib/compare/baseline-paths";
 import { importBaselineVersion, readBaselineManifest } from "@/lib/compare/baselines";
+import type { AccessibilitySnapshot } from "@/lib/compare/types";
 import { ComparisonError } from "@/lib/compare/errors";
 import { sha256Hex } from "@/lib/compare/integrity";
 import {
@@ -70,6 +71,7 @@ async function seedStore(
     readonly versionId?: string;
     readonly png: Buffer;
     readonly activate?: boolean;
+    readonly quality?: AccessibilitySnapshot | null;
   },
 ): Promise<void> {
   await importBaselineVersion({
@@ -81,6 +83,7 @@ async function seedStore(
     sourceReportId: SOURCE_RUN,
     capturedRoute: "/",
     note: "approved by a test",
+    quality: options.quality ?? null,
     routeName: "Overview",
     origin: "http://127.0.0.1:4173",
     activate: options.activate ?? true,
@@ -435,5 +438,91 @@ describe("exportPortableBaselines", () => {
     const imported = await importPortableBaselines({ from: bundle.root, selection: ALL, activate: true, cwd: freshStore });
     expect(imported.added).toBe(1);
     expect(imported.scopes[0].activeVersionId).toBe(VERSION_ID);
+  });
+});
+
+describe("accessibility snapshots in portable bundles", () => {
+  const snapshot: AccessibilitySnapshot = {
+    runnerVersion: "4.14.0",
+    approvedAt: APPROVED_AT,
+    fingerprints: ["button-name@main > button.save", "label@#email"],
+    violationCount: 2,
+  };
+
+  it("carries an approved accessibility snapshot through a bundle round trip", async () => {
+    const sourceStore = path.join(await tempDir("store-quality-src"), "data");
+    await seedStore(sourceStore, { png: png(8, 8, [3, 3, 3]), quality: snapshot });
+    const bundle = await makeBundle(sourceStore, path.join(await tempDir("bundle-quality"), "bundle"));
+
+    // The exported manifest keeps the snapshot, fingerprints and approval provenance intact.
+    const parsed = parsePortableBundle(await readFile(bundle.manifest, "utf8"));
+    expect(parsed.scopes[0].versions[0].quality).toEqual(snapshot);
+
+    // A clean machine gets the same reference back, not merely the image.
+    const freshStore = path.join(await tempDir("store-quality-fresh"), "data");
+    const imported = await importPortableBaselines({ from: bundle.root, selection: ALL, activate: true, cwd: freshStore });
+    expect(imported.added).toBe(1);
+    expect(imported.accessibilitySnapshots).toBe(1);
+    const manifest = await readBaselineManifest(PROJECT_SCOPE, "desktop", freshStore);
+    expect(manifest?.versions[0].quality).toEqual(snapshot);
+  });
+
+  it("never invents a reference when a bundle has no snapshot", async () => {
+    const sourceStore = path.join(await tempDir("store-quality-none"), "data");
+    await seedStore(sourceStore, { png: png(8, 8, [4, 4, 4]) });
+    const bundle = await makeBundle(sourceStore, path.join(await tempDir("bundle-quality-none"), "bundle"));
+
+    const parsed = parsePortableBundle(await readFile(bundle.manifest, "utf8"));
+    expect(parsed.scopes[0].versions[0].quality).toBeNull();
+
+    const freshStore = path.join(await tempDir("store-quality-none-fresh"), "data");
+    const imported = await importPortableBaselines({ from: bundle.root, selection: ALL, activate: true, cwd: freshStore });
+    expect(imported.accessibilitySnapshots).toBe(0);
+    const manifest = await readBaselineManifest(PROJECT_SCOPE, "desktop", freshStore);
+    expect(manifest?.versions[0].quality).toBeUndefined();
+    // Absent must never be read as "no violations were found".
+    expect(manifest?.versions[0].quality?.fingerprints ?? []).toEqual([]);
+  });
+
+  it("refuses a malformed or misdated snapshot rather than half-trusting it", async () => {
+    const store = path.join(await tempDir("store-quality-bad"), "data");
+    await seedStore(store, { png: png(8, 8, [6, 6, 6]), quality: snapshot });
+    const bundle = await makeBundle(store, path.join(await tempDir("bundle-quality-bad"), "bundle"));
+    const good = await readFile(bundle.manifest, "utf8");
+
+    const rejected = async (edit: (quality: Json) => void, matcher: RegExp): Promise<void> => {
+      const edited = await editManifest(bundle.manifest, good, (value) => {
+        edit(versionsOf(scopesOf(value)[0])[0].quality as Json);
+      });
+      expect(() => parsePortableBundle(edited)).toThrow(matcher);
+    };
+
+    await rejected((quality) => (quality.violationCount = 3), /claims 3 violation/);
+    await rejected((quality) => (quality.fingerprints = ["b@x", "a@y"]), /sorted order/);
+    await rejected((quality) => (quality.fingerprints = ["a@y", "a@y"]), /appears more than once/);
+    await rejected((quality) => (quality.fingerprints = ["no-selector"]), /not a <rule>@<selector> fingerprint/);
+    await rejected((quality) => delete quality.runnerVersion, /runnerVersion/);
+    await rejected((quality) => (quality.approvedAt = "2020-01-01T00:00:00.000Z"), /approved at/);
+    await rejected((quality) => (quality.surprise = true), /unknown accessibility snapshot field/);
+
+    expect(() => parsePortableBundle(good)).not.toThrow();
+  });
+
+  it("refuses a bundle whose version carries a snapshot the store cannot validate", async () => {
+    const store = path.join(await tempDir("store-quality-direct"), "data");
+    await expect(
+      importBaselineVersion({
+        scope: PROJECT_SCOPE,
+        viewportId: "desktop",
+        versionId: VERSION_ID,
+        png: png(8, 8, [2, 2, 2]),
+        approvedAt: APPROVED_AT,
+        sourceReportId: SOURCE_RUN,
+        capturedRoute: "/",
+        quality: { runnerVersion: "4.14.0", approvedAt: "not a date", fingerprints: [], violationCount: 0 },
+        cwd: store,
+      }),
+    ).rejects.toThrow(/unusable/);
+    expect(await readBaselineManifest(PROJECT_SCOPE, "desktop", store)).toBeNull();
   });
 });

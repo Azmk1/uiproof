@@ -51,6 +51,9 @@ function accessibility(findings: readonly AccessibilityFinding[]): Accessibility
     needsReview: findings.filter((item) => item.status === "needs-review").length,
     bestPracticeViolations: 0,
     findings,
+    violations: findings
+      .filter((item) => item.status === "violation")
+      .map((item) => ({ fingerprint: item.fingerprint, impact: item.impact, wcag: item.wcagTags.length > 0 })),
     truncated: false,
     totalFindings: findings.length,
     skippedResults: 0,
@@ -64,6 +67,7 @@ function responsive(): ResponsiveSummary {
     documentOverflowPx: 0,
     scrollableRegions: [],
     findings: [],
+    defects: [],
     contained: [],
     truncated: false,
     elementsMeasured: 120,
