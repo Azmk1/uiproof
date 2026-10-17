@@ -16,8 +16,14 @@ commit next to your code and a clean CI runner can load and compare against. Pha
 gate trustworthy: the reference comes from the pull request's **base branch** rather than from the
 pull request itself, nothing in the gate ever **captures or approves** anything, and the whole job
 runs in one **pinned container image** so the committed baseline and the runner's screenshot are
-comparable. Later phases add accessibility and design-consistency checks, GitHub integration, and
-AI-assisted repair proposals — none of that is wired up yet.
+comparable. Phase 5 adds **accessibility and responsive layout** as measurements a pipeline can gate
+on, with a policy whose every threshold is a flag and a gate that fails on real defects without ever
+approving anything. Phase 6 is the **independent pilot**: the CLI was installed into a separate
+Next.js application written for the exercise, baselines were approved there, four real regressions
+and accessibility defects were planted, detected and reverted, and the result is written up in
+[docs/PILOT.md](docs/PILOT.md) — including the install path that did not exist and the three
+reporting problems the pilot exposed. Later phases add GitHub integration and AI-assisted repair
+proposals — none of that is wired up yet.
 
 ---
 
@@ -46,9 +52,11 @@ AI-assisted repair proposals — none of that is wired up yet.
 - **Local persistence.** Screenshots and the JSON report are written to `.uiproof/data`, so a page
   refresh — or a server restart — keeps the last run, the approved baseline and the version history
   on screen.
-- **A CLI that a pipeline can gate on.** `pnpm uiproof capture|check|audit|projects|baselines` runs the
-  same engine without the dashboard, prints one JSON document for automation, and separates "your UI
-  changed" (`1`) from "the tool could not answer" (`2`).
+- **An installable CLI.** `pnpm uiproof capture|check|audit|projects|baselines` runs the same engine
+  without the dashboard, prints one JSON document for automation, and separates "your UI changed"
+  (`1`) from "the tool could not answer" (`2`). `pnpm pack` turns it into a package with a `uiproof`
+  bin, so another project can install it with `pnpm add -D <tarball>` — verified from a separate
+  application in the [independent pilot](docs/PILOT.md).
 - **Portable, integrity-checked baselines.** `baselines export` writes a bundle you can commit;
   `baselines import --activate` loads it on a machine that has never seen UIProof, verifying every
   image against its recorded SHA-256, byte count and dimensions first.
@@ -142,6 +150,29 @@ the engine produces zero changed pixels — and therefore no false positives —
 UIProof can capture an application that is already running on this machine — your dev server, your
 preview build, anything on loopback. Nothing is uploaded and nothing is fetched from the internet:
 the browser it drives talks to `127.0.0.1` (and to whatever you explicitly allow).
+
+### Install it
+
+UIProof is not published to npm yet, so the distribution is a tarball built from a checkout:
+
+```bash
+# once, in a UIProof checkout
+pnpm install
+pnpm pack --pack-destination /tmp          # builds dist/cli/uiproof.mjs; ~350 KB
+
+# in your own project
+pnpm add -D /tmp/uiproof-0.1.0.tgz
+pnpm exec playwright install chromium      # the browser the CLI drives (one-off, ~120 MB)
+pnpm exec uiproof --version
+```
+
+`pnpm pack` runs `prepack`, which bundles `src/cli` with esbuild, so the installed package runs the
+same CLI this repository runs — nothing is compiled in your project. The tarball declares Playwright,
+axe-core, pixelmatch and pngjs as dependencies, so your own lockfile pins them. Re-pack and re-install
+after changing UIProof itself; `uiproof --version` says which build a project has.
+
+Running UIProof from a checkout (`pnpm uiproof …`) still works and needs no packing — that is the
+workflow the rest of this README uses.
 
 ### 1 · Declare it
 
@@ -635,6 +666,13 @@ verdict says `No approved accessibility snapshot exists for <viewport>` rather t
 another viewport's approval. The same rule makes a bundle honest: an approval without a snapshot
 never becomes one.
 
+**Approve every viewport you audit.** `audit` measures all three presets by default, so `--new-only`
+needs a snapshot for each of them: approving desktop and mobile and then auditing the default set
+makes the same finding fail as *new* at tablet. Either approve all three
+(`capture --approve --quality --viewport <id>` per viewport) or narrow the audit with `--viewport`.
+The [independent pilot](docs/PILOT.md) walked into this once, and `capture --approve` without
+`--quality` leaves no snapshot at all — `--new-only` then has no reference and counts every finding.
+
 ### Portable approved baselines
 
 The store is runtime state — git-ignored, container-ephemeral, absent on a fresh CI runner. A
@@ -911,6 +949,15 @@ through the browser:
 | Restart | UIProof is stopped and started again on the same data directory: the baseline and every run id are still there, and a fresh run still passes |
 | Refusals | Unregistered project, unregistered/traversal route, absolute URL, off-origin redirect (`502`, nothing stored), unsafe path in the config file, unreachable dev server, cross-site approval |
 
+### The Phase 6 pilot, on an application outside this repository
+
+[docs/PILOT.md](docs/PILOT.md) is the write-up of the CLI being installed into a separate Next.js
+application (`Ridgeway Ops`, four routes, its own git history) and used for real: the tarball
+install, eight approved baselines, four planted regressions — two visual, one accessibility, one
+layout — and the revert. Numbers, screenshots of the approving/detected states, the CI script's
+failure and pass, the friction and the fixes it produced are all there; so is what it did **not**
+prove.
+
 ### Verified end to end
 
 Checked against a running server, not just in tests:
@@ -1056,13 +1103,21 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
 - **The browser suite is smoke-level.** It covers the console flow, the audit regressions and the
   baseline lifecycle. It does not diff artefacts per pixel, and it runs against a throwaway data
   directory rather than a long-lived history.
-- **The CLI runs from this repository.** It is not published to npm yet (the package is `private`), so
-  a consumer needs the checkout: `pnpm uiproof` bundles `src/cli` with esbuild into the git-ignored
-  `.uiproof/cli/uiproof.mjs` and runs it. Shipping a package is a later decision, not a Phase 4 one.
+- **The CLI is distributed as a local tarball, not a published package.** `pnpm pack` builds
+  `dist/cli/uiproof.mjs` and the package exposes a `uiproof` bin, so another project can install it
+  with `pnpm add -D /path/to/uiproof-0.1.0.tgz` (see *Install it*). The package is still `private`:
+  no registry, no versioning contract for consumers, no changelog. A consumer that installs the
+  tarball also pins Playwright and axe-core through its own lockfile, and re-installing is manual.
 - **A baseline is only pixel-exact for the environment that rendered it.** Fonts, rasteriser and
   Chromium build differ across machines, which is why the gate, the walkthrough and the generator all
   run in one pinned image: the committed bundle is reproducible there (four runs, one image hash) and
   nowhere else by assumption. A different digest or architecture means regenerating the baseline.
+- **The protection is this repository's, not a guest's.** The gates below extract the checker and the
+  reference from the base branch and run in a pinned image. Nothing about them transfers
+  automatically: an adopting project that installs the CLI from its own tree, imports its own bundle
+  and runs in its own environment has to arrange the equivalent protection itself. The
+  [pilot](docs/PILOT.md#10-remaining-trust-boundary-weaknesses) records what a minimal setup leaves
+  open, which is most of it.
 - **The gates block only if the repository says so.** Requiring the `gate · trusted baseline` and
   `gate · accessibility and layout` checks, requiring code-owner review, keeping branches up to date
   and restricting pushes to the base branch are manual GitHub settings — a workflow cannot protect
@@ -1105,8 +1160,9 @@ list is next:
    and a gate can say which commit moved the pixels.
 3. **One command for a whole project.** `uiproof check --all` across every registered route and
    viewport, with a single rolled-up exit code and per-route results, instead of a shell loop.
-4. **Publish the CLI.** Ship `uiproof` as a package with a pinned Chromium dependency so a consumer
-   does not need this repository at all, and keep the store format unchanged.
+4. **Publish the CLI.** The package is installable from a tarball ([pilot](docs/PILOT.md)); shipping it
+   to a registry with a pinned Chromium dependency, a versioning contract and a changelog is the
+   remaining step, and the store format stays unchanged.
 5. **Multi-viewport approvals.** One approval covering desktop/tablet/mobile, with per-viewport pass
    or fail in a single report.
 6. **Then GitHub integration and AI repair proposals** — after all of the above, not before.

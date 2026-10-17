@@ -3,11 +3,12 @@
 **North star:** an automated frontend quality platform that detects visual regressions,
 accessibility problems and design inconsistencies — see `docs/GOAL.md`.
 
-**Current milestone:** Phase 4.5 — trusted baselines and genuine CI enforcement.
+**Current milestone:** Phase 6 — the independent developer pilot.
 **Status:** complete, verified, committed.
 
 Phase 1 = 8 / 8 criteria (100 %) · Phase 2 = 10 / 10 criteria (100 %) · Phase 3 =
-12 / 12 criteria (100 %) · Phase 4 = 12 / 12 criteria (100 %) · Phase 4.5 = **7 / 7 criteria (100 %)**.
+12 / 12 criteria (100 %) · Phase 4 = 12 / 12 criteria (100 %) · Phase 4.5 = 7 / 7 criteria (100 %) ·
+Phase 5 = 9 / 9 · Phase 5.1 = 7 / 7 · **Phase 6 = 8 / 8 criteria (100 %)**.
 
 ---
 
@@ -598,6 +599,60 @@ viewport it was approved for), and both have a fixture that fails if the propert
 
 ---
 
+## Phase 6 — the independent developer pilot
+
+**Goal:** prove UIProof is genuinely usable outside its own repository — a realistic application,
+written for the exercise, in its own working directory — before any AI-assisted repair work begins.
+Every phase until now had been exercised on fixtures and an example app authored by the same person
+who wrote the checker.
+
+### Acceptance criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | **A separate, realistic application — not one of this repository's fixtures** | **Verified** | `Ridgeway Ops`: a four-route Next.js 16.4.1 hire-desk console, its own git repository at `C:\Users\azmrk\Documents\GitHub\uiproof-pilot`, no shared code with UIProof. Dashboard, bookings list with filters, booking detail, settings form; hand-written CSS with desktop and mobile breakpoints; [docs/PILOT.md](PILOT.md#1--what-was-piloted) |
+| 2 | **Installed by a reproducible local distribution — no npm publish** | **Verified (after a fix)** | `pnpm pack` → a 354 KB tarball whose `prepack` builds `dist/cli/uiproof.mjs`; `pnpm add -D file:vendor/uiproof-0.1.0.tgz` in the pilot, 40.5 s cold / 7 s reinstall. The first attempt — `pnpm add -D file:../uiproof` — produced **no command**: the package had no `bin`, no bundle and no `files` list. That blocking gap was fixed in this phase |
+| 3 | **At least three routes, desktop and mobile viewports** | **Verified** | Four registered routes; eight approved baselines (four routes × desktop 1280×800 / mobile 390×844) in 11 s; `audit` additionally measures tablet, which the pilot learned matters for `--new-only` |
+| 4 | **Approved baselines, genuine regressions and accessibility problems, accurately reported** | **Verified** | Four plausible edits (two KPI values + a 720 px promo strip; a label replaced by a span; low-contrast helper text) produced `REGRESSION 5.3404 %` desktop / `2.1269 %` mobile, `accessibility.critical select-name@#booking-status`, `accessibility.serious color-contrast@.hint-subtle` and `responsive.document-overflow 348 px` at mobile. The untouched route stayed `PASS 0 %` at both gates; the bookings page stayed visually `PASS 0 %` while failing the audit — the two gates caught different things |
+| 5 | **Onboarding tested: setup, configuration errors, baseline review, CLI usability, CI integration, report readability** | **Verified** | Registration validated by `uiproof projects`; five configuration failures (missing file, malformed JSON, non-loopback origin, unknown project, unknown route) each exited `2` naming the file and the value; an unreachable app exited `2` and was never mistaken for a UI change; `baselines status` reviewed the store; export 528 KB → import on a wiped store → `PASS 0 %` with `9 version(s) carried an accessibility snapshot`; a 16-invocation gate script measured at 25–33 s, failing 1 → passing 0 |
+| 6 | **False positives, confusing UX and unnecessary steps identified — and only demonstrated problems fixed** | **Verified** | No false positives: 8/8 checks reported 0 % after approval, deliberate scrollers stayed contained evidence, 24 undecidable contrast checks stayed questions. Four real problems were found and fixed (installability; a violation/question distinction missing from the listing; a count that called 24 questions "24 violations"; a store-relative evidence path) plus two cosmetic ones. Nothing was changed on speculation — [docs/PILOT.md](PILOT.md#12--what-was-changed-in-uiproof-because-of-the-pilot) lists the five edits |
+| 7 | **CI trust-boundary weaknesses reviewed and documented without overclaiming** | **Verified** | [docs/PILOT.md](PILOT.md#10-remaining-trust-boundary-weaknesses) records seven weaknesses of a guest setup: the CLI arrives as a committed tarball, dependencies come from the revision under test, the reference bundle lives in the branch, no branch protection, no cross-machine determinism, a gate script a pull request can edit, and `needs review` never gating. The pilot's workflow has **not** run on a hosted runner and says so |
+| 8 | **The whole workflow recorded: steps, real time, screenshots, findings, limitations** | **Verified** | [docs/PILOT.md](PILOT.md) with measured timings per step, five committed screenshots (`docs/pilot/`), the friction table in the order it was hit, the trust boundary and the limitations |
+
+### Milestone log
+
+| Milestone | Outcome |
+|-----------|---------|
+| M42 — package the CLI | `bin/uiproof.mjs` launcher, `files` allow-list, `prepack` building `dist/cli/uiproof.mjs`, `--out` on the bundler; `dist/` ignored by git and lint. Verified by packing, installing into two throwaway projects and running capture/check/audit from the installed package |
+| M43 — the pilot application | `Ridgeway Ops`: four routes, fixed data (no clock, so captures are stable), responsive CSS, its own git history, committed portable baselines and a CI gate script + workflow. Built outside this repository by design |
+| M44 — baselines and detection | Eight approvals; defects applied as a real commit, measured, then reverted with `git checkout`; the defective-page-approved → fixed → `resolved 1` cycle run against a separate store |
+| M45 — reporting fixes | `src/cli/finding-lines.ts` (needs-review marker + a count line that counts violations, not questions) with 7 unit tests; the audit transcript prints the absolute evidence directory; one duplicated hint removed; `e2e/quality.test.ts` asserts the printed path exists on disk |
+| M46 — documentation | `docs/PILOT.md` (13 sections), README install path + the "approve every viewport you audit" rule + limitations rewritten, `docs/pilot/` screenshots, this record |
+
+### Evidence
+
+| Check | Result |
+|-------|--------|
+| Install from a tarball | `pnpm pack` → 354 KB (`bin/`, `dist/cli/`, `package.json`, `README.md`); `pnpm exec uiproof --version` → `0.1.0` and a real capture in two separate throwaway projects |
+| Clean-store parity | `baselines export` (528 KB, 9 versions) → wiped store → `baselines import --activate` → `PASS 0%`, `audit --new-only` clean |
+| Regressions | dashboard `1` (5.3404 % desktop / 2.1269 % mobile), settings `1` (0.5471 % / 2.551 %), bookings `0` visual but `1` audit, detail `0`/`0` |
+| Quality gate | `audit` exit `1` on three routes with named fingerprints and a measured 348 px overflow; exit `0` after the revert |
+| CI script | `GATE FAIL` with four named failures → after the revert `GATE PASS`, 25–33 s for 16 CLI invocations |
+| Full chain (this repository) | lint · typecheck · **245** unit tests / 20 files · production build · **62** browser tests / 8 files — green |
+
+**Problems this phase found in UIProof, all fixed at the source:** the package could not be installed
+at all; the audit listing gave a violation and a needs-review question the same shape; the count line
+called every finding a violation; the evidence path could not be opened as printed. Each was found by
+using the tool, not by reading it — which is the point of the phase.
+
+One more was self-inflicted and caught before it shipped: the bundling script that `pnpm pack` runs
+took a `--out` flag for its own output path, which is also `baselines export --out <dir>`'s flag, so
+every export/import in the browser suite broke. The suite failed, the flag was renamed to
+`--bundle-out`, and the two failing files were re-run green. A build-tooling change is exactly as
+capable of breaking the product as a source change, and the existing tests were the reason it did not.
+
+---
+
 ## Decisions made during implementation
 
 - **Route groups** `(console)` / `(fixtures)` keep console chrome off the screens under test.
@@ -640,8 +695,10 @@ viewport it was approved for), and both have a fixture that fails if the propert
 - Cross-process safety assumes one machine and a local filesystem; there is no distributed lock.
 - Registered projects are loopback-only, and a page that redirects to another origin is refused
   rather than captured.
-- The CLI runs from this repository (the package is still `private`); a consumer needs the checkout,
-  and `pnpm uiproof` rebuilds the git-ignored bundle when a source file changes.
+- The CLI is installable from a tarball (`pnpm pack` → `pnpm add -D <tarball>`, verified in the
+  [pilot](PILOT.md)), but the package is still `private`: no registry, no consumer versioning
+  contract, and re-installing after an upstream change is manual. From inside this repository,
+  `pnpm uiproof` still rebuilds the git-ignored bundle when a source file changes.
 - An approved baseline is only pixel-exact for the environment that rendered it. The committed
   example bundle is now rendered by the pinned image the gate runs in, and three independent runs
   produced identical bytes — but a different image digest, a different architecture or a page with
@@ -651,6 +708,11 @@ viewport it was approved for), and both have a fixture that fails if the propert
   itself: requiring the `gate · trusted baseline` check, requiring review from code owners, requiring
   branches to be up to date and restricting pushes to the base branch are manual settings, listed in
   `docs/BASELINE-UPDATES.md`. Without them the gate is a signal, not a gate.
+- **None of that protection transfers to a project that adopts the CLI.** The pilot's own workflow
+  imports a bundle from its branch and runs a checker it installed from a committed tarball, so a pull
+  request there could authorise or judge its own change. `docs/PILOT.md` lists the seven weaknesses a
+  guest setup has and what it would take to close each one; the pilot's workflow has also not run on a
+  hosted runner, and only its commands were exercised locally.
 - The gate checks one project route at one viewport per invocation; more routes are a loop over
   `run-gate.sh` in the consumer's workflow.
 - The walkthrough edits the application's view and the repository's bundle inside the runner's
@@ -679,14 +741,16 @@ to review; a separate locked install is the next step.
 
 ## Next approved action
 
-Phase 5.1 is delivered and verified on `main`: the quality gate's three false-pass paths are closed
-(complete verdict inputs, viewport-scoped approvals, portable snapshots), and the accessibility and
-layout check is a required CI gate that audits a real page at three viewports, runs its own
-implementation from the protected base revision, and writes its evidence whether it passes or fails.
-The recommended next milestone remains the sharpening work this displaced:
-**Phase 6 — make the gate sharper, and cheaper to run everywhere**: ignore regions recorded in the
-report, a git SHA per run, `uiproof check --all` across a whole project, a published CLI package, and
-multi-viewport approvals. Two smaller items belong with it: an automated check that the manual branch
+Phase 6 is delivered: UIProof has been installed into an application outside this repository and used
+to approve baselines, catch real regressions and gate a pipeline — see [PILOT.md](PILOT.md). The
+pilot's four product defects are fixed and covered by tests; its findings are recorded, including the
+seven trust-boundary weaknesses a guest CI setup still has and the fact that the pilot's own workflow
+has never run on a hosted runner.
+
+The recommended next milestone remains the sharpening work the pilot's friction list points at:
+**Phase 7 — make the gate sharper, and cheaper to run everywhere**: ignore regions recorded in the
+report, a git SHA per run, `uiproof check --all` across a whole project, the CLI published to a
+registry (the pilot took it as far as an installable tarball), and multi-viewport approvals. Two smaller items belong with it: an automated check that the manual branch
 protection settings in `docs/BASELINE-UPDATES.md` are actually configured, and a scheduled
 regeneration probe that fails when a new image digest changes rendering rather than letting it surface
 as a mystery regression. Details at the end of the README.
