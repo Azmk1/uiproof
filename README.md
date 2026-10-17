@@ -726,6 +726,18 @@ dependencies are still the revision under test's, which is written down rather t
 [docs/BRANCH-PROTECTION.md](docs/BRANCH-PROTECTION.md) records the branch-protection and CODEOWNERS
 settings that make both gates block, and exactly what remains outside the trust boundary.
 
+Verified on GitHub Actions: on `main` the quality gate passes against the committed reference line
+(run 39005281985) and the quality walkthrough reproduces **38/38** documented answers — clean pass,
+introduced violation, introduced mobile overflow, desktop approval not authorising mobile, the
+exported/imported reference, the 68-finding page whose serious violation sorts past the display cap,
+the CSP page that refuses the scanner (exit `2`), and the restore (run 39005281955).
+[Pull request #2](https://github.com/Azmk1/uiproof/pull/2) shows the failing direction: a real defect
+in the application's own support view fails `gate · accessibility and layout` (run 39005319352) with
+`accessibility.critical` ×3, `accessibility.serious` ×1 and `responsive.document-overflow` — 346px at
+mobile — plus the audit report and one screenshot per viewport as the uploaded evidence, while the
+visual gate stays green because it compares the untouched `/` route; restoring the page passes again
+(run 39005580428).
+
 Updating the baseline is its own reviewed procedure: dispatch
 [the update workflow](.github/workflows/baseline-update.yml), review the artifact and its provenance,
 commit the bundle. It cannot be reached from a pull request and it never commits anything itself.
