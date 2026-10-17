@@ -164,30 +164,28 @@ ci_info "store:    $STORE"
 ci_info "evidence: $ARTIFACTS"
 
 # ── 1 · The trusted reference, when there is one ─────────────────────────────────────────
+#
+# The whole bundle is loaded, not one selected scope: a bundle that covers other routes is a
+# valid bundle, and whether the *audited* route has a reference is answered by the audit's own
+# `references` list in step 3. A malformed, tampered or unreadable bundle still stops the gate
+# here — that is the distinction that has to survive.
 ci_heading "1 · The trusted reference"
-REFERENCES="0"
 if [ -n "$BUNDLE" ]; then
   [ -d "$BUNDLE" ] || ci_fail "audit-gate.sh: the trusted bundle directory $BUNDLE does not exist."
   IMPORT_STATUS=0
   ci_run_capture "$ARTIFACTS/import.json" "$ARTIFACTS/import.log" \
     ci_uiproof baselines import --from "$BUNDLE" --activate \
-    --config "$CONFIG" --project "$PROJECT" --route "$ROUTE" \
-    --storage "$STORE" --json || IMPORT_STATUS=$?
+    --config "$CONFIG" --storage "$STORE" --json || IMPORT_STATUS=$?
   cat "$ARTIFACTS/import.log"
   if [ "$IMPORT_STATUS" -ne 0 ]; then
     ci_error "the trusted bundle could not be loaded (exit $IMPORT_STATUS) — an unreadable or tampered bundle stops the gate instead of passing it"
     cat "$ARTIFACTS/import.json" || true
     exit "$CI_INFRASTRUCTURE"
   fi
-  REFERENCES="$(ci_json_get "$ARTIFACTS/import.json" accessibilitySnapshots)"
-  ci_ok "loaded the trusted bundle: $(ci_json_get "$ARTIFACTS/import.json" added) version(s), ${REFERENCES:-0} carrying an accessibility snapshot"
+  ci_ok "loaded the trusted bundle: $(ci_json_get "$ARTIFACTS/import.json" added) version(s), $(ci_json_get "$ARTIFACTS/import.json" accessibilitySnapshots) carrying an accessibility snapshot"
+  ci_info "whether $PROJECT/$ROUTE itself has a reference is decided by the audit below, per viewport"
 else
   ci_info "no --bundle was given: the full policy runs, which needs no reference, and the report will say no reference exists"
-fi
-
-if [ -n "$NEW_ONLY" ] && [ "${REFERENCES:-0}" -eq 0 ]; then
-  ci_error "--new-only was asked for, but no accessibility reference was imported in this run: there is nothing trustworthy to compare against"
-  exit "$CI_INFRASTRUCTURE"
 fi
 
 # ── 2 · The application under test ───────────────────────────────────────────────────────
@@ -220,6 +218,15 @@ REPORT_PATH="$(ci_json_get "$ARTIFACTS/audit.json" reportPath)"
 REPORT_ID="$(ci_json_get "$ARTIFACTS/audit.json" report.id)"
 EXIT_CODE_FIELD="$(ci_json_get "$ARTIFACTS/audit.json" exitCode)"
 TOTAL_FINDINGS="$(ci_json_get "$ARTIFACTS/audit.json" report.viewports.0.accessibility.totalFindings)"
+# How many audited viewports actually had a reference: the audit resolves one per viewport, so
+# this is the only number that means "this run could classify findings as new".
+REFERENCES="$(ci_json_get "$ARTIFACTS/audit.json" report.references.length)"
+REFERENCES="${REFERENCES:-0}"
+
+if [ -n "$NEW_ONLY" ] && [ "$REFERENCES" -eq 0 ]; then
+  ci_error "--new-only was asked for, but the audit used no accessibility reference for $PROJECT/$ROUTE: there was nothing trustworthy to compare against"
+  exit "$CI_INFRASTRUCTURE"
+fi
 
 # ── 4 · Evidence ─────────────────────────────────────────────────────────────────────────
 ci_heading "4 · Evidence"
@@ -290,7 +297,7 @@ node -e '
         gate: "uiproof-quality",
         exitCode: Number(status),
         reportStatus: reportStatus || null,
-        trustedReferences: references === "" ? 0 : Number(references),
+        referenceViewports: references === "" ? 0 : Number(references),
         screenshotsCopied: Number(screenshots),
         reportId: reportId || null,
         reportPath: reportPath || null,
@@ -304,7 +311,7 @@ node -e '
       2,
     ) + "\n",
   );
-' "$ARTIFACTS/audit-gate-summary.json" "$STATUS" "$REPORT_STATUS" "${REFERENCES:-0}" "$SCREENSHOTS" "$REPORT_ID" "$REPORT_PATH" "${UIPROOF_CLI_DIR:-}"
+'  "$ARTIFACTS/audit-gate-summary.json" "$STATUS" "$REPORT_STATUS" "$REFERENCES" "$SCREENSHOTS" "$REPORT_ID" "$REPORT_PATH" "${UIPROOF_CLI_DIR:-}"
 
 ci_info "summary: $ARTIFACTS/audit-gate-summary.json"
 
@@ -318,7 +325,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf '| | |\n| --- | --- |\n'
     printf '| exit code | `%s` — %s |\n' "$STATUS" "$(ci_explain_code "$STATUS")"
     printf '| audit report | `%s` |\n' "${REPORT_ID:-none}"
-    printf '| trusted references | %s |\n' "${REFERENCES:-0}"
+    printf '| reference viewports | %s |\n' "$REFERENCES"
     printf '| screenshots | %s |\n' "$SCREENSHOTS"
     printf '| checker | `%s` |\n' "${UIPROOF_CLI_DIR:-the working tree}"
     printf '| viewed by | `%s` |\n\n' "$UIPROOF_IMAGE"
