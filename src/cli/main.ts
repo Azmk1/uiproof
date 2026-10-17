@@ -6,16 +6,17 @@ import { closeBrowser } from "@/lib/compare/browser";
 import { runComparison } from "@/lib/compare/engine";
 import { ComparisonError } from "@/lib/compare/errors";
 import { formatBytes, formatChangePercentage } from "@/lib/compare/metrics";
-import { resolveReportDir } from "@/lib/compare/storage-paths";
+import { resolveAuditDir, resolveReportDir } from "@/lib/compare/storage-paths";
 import { DEFAULT_VIEWPORT_ID, VIEWPORT_PRESETS, getViewport } from "@/lib/compare/targets";
 import type { BaselineScope, ComparisonReport } from "@/lib/compare/types";
 import { runQualityAudit } from "@/lib/quality/audit";
 import { describePolicy } from "@/lib/quality/policy";
-import type { AccessibilityFinding, QualityVerdict } from "@/lib/quality/types";
+import type { QualityVerdict } from "@/lib/quality/types";
 import { loadProjectCatalog, resolveProjectConfigPath } from "@/lib/projects/config";
 import { findProject, findRoute } from "@/lib/projects/registry";
 import { CLI_NAME, CliUsageError, helpText, parseArgs, type ParsedArgs } from "./args";
 import { EXIT_ERROR, EXIT_PASS, EXIT_REGRESSION, type CliExitCode } from "./exit-codes";
+import { accessibilitySummaryLine, findingLines } from "./finding-lines";
 import { createOutput, type CliOutput } from "./output";
 import { exportPortableBaselines, importPortableBaselines } from "./portable";
 
@@ -79,7 +80,7 @@ async function requireSource(parsed: ParsedArgs, io: CliOutput): Promise<Source>
   if (!catalog.configPath) {
     throw new ComparisonError(
       "project_config_invalid",
-      `No registration file found at ${resolveProjectConfigPath()}. Create one, or pass --config <file>.`,
+      `No registration file found at ${resolveProjectConfigPath()}.`,
     );
   }
 
@@ -254,16 +255,6 @@ export async function runCheck(parsed: ParsedArgs, io: CliOutput, viewportId: st
   return regression ? EXIT_REGRESSION : EXIT_PASS;
 }
 
-/** One finding line, with the evidence a reviewer needs to act on it. */
-function auditFindingLines(finding: AccessibilityFinding): string[] {
-  const impact = finding.impact ?? "unstated";
-  const lines = [`    [${impact}] ${finding.rule} — ${finding.selector}`];
-  if (finding.help) lines.push(`        ${finding.help}`);
-  if (finding.html) lines.push(`        ${finding.html}`);
-  if (finding.summary) lines.push(`        ${finding.summary}`);
-  return lines;
-}
-
 function auditVerdictLine(verdict: QualityVerdict): string {
   if (verdict.status === "pass") return "QUALITY PASS";
   return "QUALITY FAIL";
@@ -308,15 +299,9 @@ export async function runAudit(parsed: ParsedArgs, io: CliOutput): Promise<CliEx
     const { accessibility, responsive } = viewport;
     io.note("");
     io.note(`${viewport.viewport.label} (${viewport.viewport.width}×${viewport.viewport.height}):`);
-    io.note(
-      `  accessibility — ${accessibility.totalFindings} violation(s) ` +
-        `(critical ${accessibility.counts.critical}, serious ${accessibility.counts.serious}, ` +
-        `moderate ${accessibility.counts.moderate}, minor ${accessibility.counts.minor}, ` +
-        `impact unstated ${accessibility.counts.unknown}), ` +
-        `${accessibility.needsReview} need(s) review`,
-    );
+    io.note(`  accessibility — ${accessibilitySummaryLine(accessibility)}`);
     for (const finding of accessibility.findings) {
-      for (const line of auditFindingLines(finding)) io.note(line);
+      for (const line of findingLines(finding)) io.note(line);
     }
     if (accessibility.truncated) {
       io.note(
@@ -365,14 +350,18 @@ export async function runAudit(parsed: ParsedArgs, io: CliOutput): Promise<CliEx
       );
     }
     io.note(
-      `  new ${report.newFindingFingerprints.length}, known ${report.knownFindingFingerprints.length}, ` +
-        `resolved ${report.resolvedFindingFingerprints.length}`,
+      `  accessibility against the reference — new ${report.newFindingFingerprints.length}, ` +
+        `known ${report.knownFindingFingerprints.length}, resolved ${report.resolvedFindingFingerprints.length}`,
     );
   } else {
     io.note("Reference: none — no approved baseline carries an accessibility snapshot for this route, so every finding counts.");
   }
 
-  if (reportPath) io.note(`Evidence: ${reportPath} (audit.json + one screenshot per viewport)`);
+  // The report's own `reportPath` is store-relative (the API serves it that way); the
+  // transcript prints the directory a person can actually open.
+  if (reportPath) {
+    io.note(`Evidence: ${resolveAuditDir(report.id)} (audit.json + one screenshot per viewport)`);
+  }
 
   const exitCode = report.verdict.status === "fail" ? EXIT_REGRESSION : EXIT_PASS;
   io.result({
@@ -577,8 +566,8 @@ function describeFailure(error: unknown): { message: string; hint: string | null
   if (error instanceof ComparisonError) {
     const hints: Partial<Record<ComparisonError["code"], string>> = {
       baseline_not_found: `Create the reference first: ${CLI_NAME} capture --project <id> --route <id> --approve`,
-      project_config_invalid: "Check the registration file, or pass --config <file>.",
-      project_unreachable: "Start the application (and check its port), then run the command again.",
+      project_config_invalid:
+        "See examples/uiproof.config.example.json for the expected shape, or pass --config <file>.",
       browser_unavailable: "Install Chromium with `pnpm setup:browser`.",
       baseline_version_conflict: "Approved versions are immutable; import a different bundle or clean the store deliberately.",
       portable_bundle_invalid: "Re-export the bundle with `baselines export`.",

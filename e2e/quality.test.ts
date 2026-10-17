@@ -217,9 +217,11 @@ describe("uiproof quality gate", () => {
       expect(png.byteLength).toBeGreaterThan(1000);
     }
 
-    // The human-readable trail is on stderr in JSON mode.
+    // The human-readable trail is on stderr in JSON mode, and the evidence line names a
+    // path a person can open rather than one relative to the store they cannot see.
     expect(run.stderr).toContain("QUALITY PASS");
     expect(run.stderr).toContain("not a defect");
+    expect(run.stderr).toContain(path.join(storeDir, "audits", report.id));
   }, 120_000);
 
   it("2. a missing accessible label is detected, and an incorrect one leaves its control unnamed", async () => {
