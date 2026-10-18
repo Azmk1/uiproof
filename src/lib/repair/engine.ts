@@ -13,19 +13,14 @@ import { openWorkspace, type Workspace } from "@/lib/diagnosis/workspace";
 import type { DiagnosticIssue } from "@/lib/diagnosis/types";
 import { readAudit } from "@/lib/quality/storage";
 import { routesToMeasure } from "./config";
+import { createRepairExecutor, type ContainerProbe, type RepairExecutor } from "./container";
 import { measureSandbox, type MeasureRoute, type MeasurementImage } from "./measure";
 import { MAX_PATCH_FILES, MAX_PATCH_LINES, preparePatch } from "./patch";
 import { buildRepairPrompt, MAX_PROMPT_FILE_CHARS, MAX_REPAIR_PROMPT_CHARS, type RepairPromptFile } from "./prompt";
 import { validateRepairProposal } from "./proposal";
 import { digestFileMap, readGitRevision } from "./revision";
-import {
-  createSandboxCopy,
-  runSandboxCommand,
-  startSandboxServer,
-  writeSandboxFile,
-  type RunningSandboxServer,
-} from "./sandbox";
-import { persistRepair, repairId, repairPatchName, reasonOf } from "./storage";
+import { createSandboxCopy, writeSandboxFile, type RunningSandboxServer } from "./sandbox";
+import { persistRepair, repairId, repairPatchName, repairReplyName, reasonOf } from "./storage";
 import type {
   RepairArtifact,
   RepairAttempt,
@@ -38,7 +33,7 @@ import type {
   SandboxCommandResult,
   SourceRevision,
 } from "./types";
-import { verifyRepair } from "./verify";
+import { invalidateForSourceDrift, sourceDriftDetail, verifyRepair } from "./verify";
 
 /**
  * The repair engine, end to end:
@@ -63,6 +58,8 @@ export const MAX_REPAIR_ATTEMPTS = 2;
 export const DEFAULT_REPAIR_ATTEMPTS = 2;
 const COMMAND_TIMEOUT_MS = 120_000;
 const RUN_TIMEOUT_MS = 10 * 60_000;
+/** How much of an unusable model answer is kept as evidence. */
+const MAX_STORED_REPLY_CHARS = 40_000;
 
 export interface RegisteredProjectLookup {
   readonly project: RegisteredProject | null;
@@ -86,6 +83,8 @@ export interface RepairEngineInput {
   /** Keep the temporary checkout after the run. Only for debugging; defaults to false. */
   readonly keepSandbox?: boolean;
   readonly now?: () => Date;
+  /** Injected in tests: a pre-made container probe, so no runtime has to exist. */
+  readonly executor?: { readonly probe?: ContainerProbe };
 }
 
 export interface RepairEngineResult {
@@ -246,9 +245,9 @@ function artifactsOf(
 }
 
 async function runConfigured(
+  executor: () => RepairExecutor,
   name: "build" | "test",
   command: readonly string[] | null,
-  cwd: string,
 ): Promise<SandboxCommandResult> {
   if (!command) {
     return {
@@ -261,16 +260,7 @@ async function runConfigured(
       reason: `No repair ${name} command is registered, so it could not be checked.`,
     };
   }
-  const outcome = await runSandboxCommand({ command, cwd, timeoutMs: COMMAND_TIMEOUT_MS });
-  return {
-    name,
-    command,
-    status: outcome.status,
-    exitCode: outcome.exitCode,
-    durationMs: outcome.durationMs,
-    outputTail: outcome.outputTail,
-    reason: outcome.reason,
-  };
+  return executor().runCommand({ name, command, timeoutMs: COMMAND_TIMEOUT_MS });
 }
 
 /** Runs one measurement pass with a fresh server, stopping it afterwards no matter what. */
@@ -285,6 +275,44 @@ async function measureOnce(
   } finally {
     await running.stop();
   }
+}
+
+/**
+ * The last thing a run does before it is stored: decide whether the tree it pinned still
+ * exists. Kept as a pure function so the rule can be tested without a browser, a model or a
+ * container — a verified verdict must not survive a source change, whatever produced it.
+ */
+export function applyRevisionOutcome(input: {
+  readonly attempts: readonly RepairAttempt[];
+  readonly digestBefore: string;
+  readonly digestAfter: string;
+  readonly commitBefore: string | null;
+  readonly commitAfter: string | null;
+  readonly dirtyBefore: boolean | null;
+  readonly dirtyAfter: boolean | null;
+}): { readonly attempts: readonly RepairAttempt[]; readonly drift: string | null } {
+  const unchanged =
+    input.digestBefore === input.digestAfter &&
+    input.commitBefore === input.commitAfter &&
+    input.dirtyBefore === input.dirtyAfter;
+  if (unchanged) return { attempts: input.attempts, drift: null };
+
+  const detail = sourceDriftDetail({
+    digestBefore: input.digestBefore,
+    digestAfter: input.digestAfter,
+    commitBefore: input.commitBefore,
+    commitAfter: input.commitAfter,
+    dirtyBefore: input.dirtyBefore,
+    dirtyAfter: input.dirtyAfter,
+  });
+  return {
+    drift: detail,
+    attempts: input.attempts.map((attempt) => {
+      if (!attempt.verification) return { ...attempt, verdict: "unverified" as const };
+      const verification = invalidateForSourceDrift(attempt.verification, detail);
+      return { ...attempt, verification, verdict: verification.verdict };
+    }),
+  };
 }
 
 /**
@@ -363,6 +391,8 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
 
   const id = repairId();
   const sandboxDir = path.join(os.tmpdir(), "uiproof-repair", id);
+  const sandboxRoot = path.join(os.tmpdir(), "uiproof-repair");
+  const helperDir = path.join(sandboxRoot, `${id}-relay`);
   const warnings: string[] = [];
   if (gitState.reason) warnings.push(gitState.reason);
   if (gitState.dirty === true) {
@@ -375,23 +405,37 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
   warnings.push(...prompt.warnings);
   const patchable = prompt.files.filter((file) => !file.truncated).map((file) => file.path);
 
+  // The executor is built once the checkout exists: a container command runs *inside* the
+  // sandbox directory, so its working directory has to be there before anything starts.
+  let executorRef: RepairExecutor | null = null;
+  const executor = (): RepairExecutor => {
+    if (!executorRef) {
+      throw new ComparisonError(
+        "repair_sandbox_failed",
+        "The sandbox was never created, so no command could run in it.",
+      );
+    }
+    return executorRef;
+  };
+
   let baseline: RepairMeasurement | null = null;
   let baselineImages: readonly MeasurementImage[] = [];
   let baselineCommands: readonly SandboxCommandResult[] = [];
   const attempts: RepairAttempt[] = [];
   const patches: Record<string, string> = {};
+  const replies: Record<string, string> = {};
   const afterImages: MeasurementImage[] = [];
   let sandboxPath: string | null = null;
   let server: RunningSandboxServer | null = null;
   const startedAt = Date.now();
 
-  const startServer = () => startSandboxServer({
-    command: repairConfig.sandbox.command,
-    cwd: sandboxDir,
-    url: repairConfig.sandbox.url,
-    readyPath: repairConfig.sandbox.readyPath,
-    env: repairConfig.sandbox.env,
-  });
+  const startServer = () =>
+    executor().startServer({
+      command: repairConfig.sandbox.command,
+      url: repairConfig.sandbox.url,
+      readyPath: repairConfig.sandbox.readyPath,
+      env: repairConfig.sandbox.env,
+    });
 
   try {
     const copy = await createSandboxCopy(workspace.root, sandboxDir);
@@ -399,6 +443,15 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
     for (const skipped of copy.skipped.slice(0, 6)) {
       warnings.push(`Not copied into the sandbox: ${skipped.path} (${skipped.reason}).`);
     }
+
+    executorRef = await createRepairExecutor({
+      config: repairConfig.execution,
+      sandboxDir,
+      helperDir,
+      runId: id.replace(/^repair-/, "").slice(0, 8),
+      ...(input.executor ? { probe: input.executor.probe } : {}),
+      onWarning: (message) => warnings.push(message),
+    });
 
     // Prove the copy holds exactly the pinned source before any patch exists.
     const copyWorkspace = await openWorkspace(copy.root);
@@ -412,8 +465,8 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
     }
 
     baselineCommands = [
-      await runConfigured("build", repairConfig.build, sandboxDir),
-      await runConfigured("test", repairConfig.test, sandboxDir),
+      await runConfigured(executor, "build", repairConfig.build),
+      await runConfigured(executor, "test", repairConfig.test),
     ];
     for (const command of baselineCommands) {
       if (command.status === "failed") {
@@ -467,14 +520,24 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
         model: null,
         rejection: null,
         patchArtifact: null,
+        replyArtifact: null,
         artifacts: [],
         verification: null,
         verdict: "unverified",
       };
 
       let patchArtifactRef: string | null = null;
+      let replyArtifactRef: string | null = null;
       let modelRef: RepairModelInfo | null = null;
       let proposalRef: RepairProposal | null = null;
+
+      /** Keeps an unusable answer as evidence, bounded. A rejected answer is not nothing. */
+      const keepReply = (content: string): string => {
+        const name = repairReplyName(attemptNumber);
+        replies[name] = content.length > MAX_STORED_REPLY_CHARS ? `${content.slice(0, MAX_STORED_REPLY_CHARS)}\n… (truncated)` : content;
+        replyArtifactRef = name;
+        return name;
+      };
 
       if (Date.now() - startedAt > RUN_TIMEOUT_MS) {
         warnings.push(`The run budget of ${RUN_TIMEOUT_MS} ms was exhausted before attempt ${attemptNumber}.`);
@@ -532,6 +595,7 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
             ...attempt,
             model,
             rejection,
+            replyArtifact: keepReply(reply.content),
             verdict: "unverified",
             durationMs: Date.now() - attemptStarted,
           };
@@ -545,6 +609,7 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
             ...attempt,
             model,
             rejection: `The model declined to propose a patch: ${draft.uncertainty ?? "no reason given"}`,
+            replyArtifact: keepReply(reply.content),
             verdict: "unverified",
             durationMs: Date.now() - attemptStarted,
           };
@@ -573,6 +638,7 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
             model,
             rejection: error.message,
             patchArtifact,
+            replyArtifact: keepReply(reply.content),
             verdict: "rejected",
             durationMs: Date.now() - attemptStarted,
           };
@@ -600,8 +666,8 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
         }
 
         const afterCommands = [
-          await runConfigured("build", repairConfig.build, sandboxDir),
-          await runConfigured("test", repairConfig.test, sandboxDir),
+          await runConfigured(executor, "build", repairConfig.build),
+          await runConfigured(executor, "test", repairConfig.test),
         ];
 
         let after: { measurement: RepairMeasurement; images: readonly MeasurementImage[] } | null = null;
@@ -660,6 +726,7 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
           model,
           rejection: null,
           patchArtifact,
+          replyArtifact: null,
           artifacts: artifactsOf(id, attemptImages),
           verification,
           verdict: verification.verdict,
@@ -678,6 +745,7 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
           proposal: proposalRef,
           model: modelRef,
           patchArtifact: patchArtifactRef,
+          replyArtifact: replyArtifactRef,
           rejection: (cause as Error).message,
           verdict: "unverified",
         };
@@ -688,7 +756,11 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
     }
   } finally {
     if (server) await server.stop().catch(() => undefined);
-    if (!input.keepSandbox) await rm(sandboxDir, { recursive: true, force: true }).catch(() => undefined);
+    if (executorRef) await executorRef.cleanup().catch(() => undefined);
+    if (!input.keepSandbox) {
+      await rm(sandboxDir, { recursive: true, force: true }).catch(() => undefined);
+      await rm(helperDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   if (!baseline) {
@@ -698,9 +770,6 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
     );
   }
 
-  const verified = attempts.find((entry) => entry.verdict === "verified") ?? null;
-  const last = attempts.at(-1) ?? null;
-  const status = verified ? "verified" : (last?.verdict ?? "unverified");
   const afterDigest = digestFileMap(await readSource(await openWorkspace(workspace.root)));
   const afterGit = await readGitRevision(workspace.root);
   const revisionAfter = {
@@ -712,11 +781,25 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
       afterGit.commitSha === revision.commitSha &&
       afterGit.dirty === revision.dirty,
   };
-  if (!revisionAfter.unchanged) {
-    warnings.push(
-      "The original source directory changed during the run. The repair itself only wrote to its sandbox, but the pinned revision no longer matches the tree.",
-    );
-  }
+
+  // A verdict describes a revision. If the developer's tree moved while the run was in
+  // flight, the measurements no longer describe anything that exists, so every verdict is
+  // withdrawn — including a `verified` one. The measurements themselves stay in the record.
+  const outcome = applyRevisionOutcome({
+    attempts,
+    digestBefore: revision.digest,
+    digestAfter: revisionAfter.digest,
+    commitBefore: revision.commitSha,
+    commitAfter: revisionAfter.commitSha,
+    dirtyBefore: revision.dirty,
+    dirtyAfter: revision.dirty,
+  });
+  if (outcome.drift) warnings.push(outcome.drift);
+  const finalAttempts: readonly RepairAttempt[] = outcome.attempts;
+
+  const verified = finalAttempts.find((entry) => entry.verdict === "verified") ?? null;
+  const last = finalAttempts.at(-1) ?? null;
+  const status = verified ? "verified" : (last?.verdict ?? "unverified");
 
   const repair: RepairRun = {
     id,
@@ -737,7 +820,7 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
     before: baseline,
     baselineArtifacts: artifactsOf(id, baselineImages),
     baselineCommands,
-    attempts,
+    attempts: finalAttempts,
     status,
     verifiedAttempt: verified?.attempt ?? null,
     limits: {
@@ -753,6 +836,7 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
       model: modelConfig.model,
       endpointHost: modelConfig.endpointHost,
     },
+    execution: executor().record,
     warnings: [...new Set(warnings)],
     aiGenerated: true,
     originalUnchanged: revisionAfter.unchanged,
@@ -761,7 +845,7 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
   const storedPath =
     input.persist === false
       ? null
-      : await persistRepair({ repair, patches, images: [...baselineImages, ...afterImages] });
+      : await persistRepair({ repair, patches: { ...patches, ...replies }, images: [...baselineImages, ...afterImages] });
 
   return {
     repair,
@@ -778,6 +862,7 @@ export async function runRepair(input: RepairEngineInput): Promise<RepairEngineR
       verifiedAttempt: repair.verifiedAttempt,
       commitSha: repair.revision.commitSha,
       originalUnchanged: repair.originalUnchanged,
+      executionMode: repair.execution.mode,
       reason: reasonOf(repair),
     },
     sandboxPath,

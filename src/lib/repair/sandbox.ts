@@ -27,6 +27,12 @@ import { ComparisonError } from "@/lib/compare/errors";
  * developer registers runs with that developer's own privileges. The isolation here is
  * filesystem- and environment-level, and the README states that assumption rather than
  * implying more.
+ *
+ * Since Phase 9 this module is the *host* half of the execution model, used only when a
+ * registration explicitly trusts it (`repair.execution.trustHostExecution`). The measured
+ * default is `container.ts`, which runs the same commands in a container with no network
+ * interface, a read-only root filesystem and bounded resources, and which imports the
+ * helpers below rather than reimplementing them.
  */
 
 export const MAX_SANDBOX_FILES = 6000;
@@ -328,7 +334,7 @@ export async function runSandboxCommand(input: {
       reason: timedOut
         ? `The command did not finish within ${input.timeoutMs} ms and was stopped.`
         : failure.code === "ENOENT"
-          ? `The command could not be started: ${input.command[0]} was not found.`
+          ? `The command could not be started: ${input.command[0]} was not found, or the working directory ${input.cwd} does not exist.`
           : (failure.message ?? "The command failed."),
     };
   }
@@ -347,7 +353,7 @@ export interface RunningSandboxServer {
   readonly stop: () => Promise<void>;
 }
 
-function portIsFree(port: number): Promise<boolean> {
+export function portIsFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = net.createServer();
     server.once("error", () => resolve(false));

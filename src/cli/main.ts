@@ -542,7 +542,11 @@ export async function runRepairCommand(parsed: ParsedArgs, io: CliOutput, cwd: s
       `${repair.revision.digestFiles} file(s) pinned`,
   );
   io.note(`Model: ${repair.model?.model ?? "none"} @ ${repair.model?.endpointHost ?? "-"}`);
+  io.note(`Execution: ${repair.execution.summary}`);
   io.note(`Sandbox: ${repair.limits.maxAttempts} attempt(s) maximum, ${repair.before.pages.length} page(s) measured`);
+  if (repair.execution.mode === "host") {
+    io.note("  WARNING: host execution is a filesystem copy, not an OS security boundary.");
+  }
 
   for (const [index, attempt] of repair.attempts.entries()) {
     io.note("");
@@ -617,6 +621,7 @@ export async function runRepairCommand(parsed: ParsedArgs, io: CliOutput, cwd: s
     auditId: repair.target.kind === "audit" ? repair.target.id : null,
     revision: repair.revision,
     revisionAfter: repair.revisionAfter,
+    execution: repair.execution,
     originalUnchanged: repair.originalUnchanged,
     verifiedAttempt: repair.verifiedAttempt,
     attempts: repair.attempts.map((attempt) => ({
@@ -833,7 +838,8 @@ function describeFailure(error: unknown): { message: string; hint: string | null
       diagnosis_source_invalid: "Check that the source directory exists and is the application you registered.",
       diagnosis_invalid_response: "The model's answer was unusable; nothing was stored and no verdict changed.",
       repair_unavailable:
-        'A repair needs a configured model and a "repair" block (sandbox, build and test commands) in the project registration.',
+        'A repair needs a configured model and a "repair" block (sandbox, build, test and execution) in the project registration. ' +
+        'Container execution is the default; "mode": "host" additionally needs "trustHostExecution": true.',
       repair_source_unregistered:
         'Register "sourceDir" on the project, or pass --source <directory>; a repair never guesses at a source tree.',
       repair_source_invalid: "Check that the source directory exists and is the application you registered.",

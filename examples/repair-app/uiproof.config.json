@@ -11,6 +11,10 @@
       ],
       "allowedOrigins": [],
       "repair": {
+        "execution": {
+          "mode": "host",
+          "trustHostExecution": true
+        },
         "sandbox": {
           "command": ["node", "server.mjs"],
           "url": "http://127.0.0.1:4199",

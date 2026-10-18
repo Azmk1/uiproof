@@ -18,6 +18,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // A separate Vite application with its own manifest, lockfile and preview server, used as a
+    // repair fixture. It is not a Next.js project, so the Next.js rules (no-html-link-for-pages
+    // among them) do not describe it: its router is the browser's, and `<a href>` is the route
+    // change. `examples/next-app` deliberately stays linted — those rules do apply to it.
+    "examples/vite-app/**",
     // Generated comparison artifacts never need linting.
     ".uiproof/**",
     // The packaged CLI bundle `pnpm pack` builds from src — generated, not source.

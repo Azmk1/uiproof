@@ -435,6 +435,28 @@ export function RepairPanel({
           </Alert>
         ) : null}
 
+        {availability?.configured && availability.execution.mode === "host" ? (
+          <Alert variant="attention">
+            <TriangleAlert />
+            <div className="flex flex-col gap-1">
+              <AlertTitle>Host execution is registered</AlertTitle>
+              <AlertDescription>
+                {availability.execution.reason}
+              </AlertDescription>
+            </div>
+          </Alert>
+        ) : null}
+
+        {availability?.configured && availability.execution.mode === "container" && availability.execution.runtimeAvailable === false ? (
+          <Alert variant="attention">
+            <TriangleAlert />
+            <div className="flex flex-col gap-1">
+              <AlertTitle>No container runtime answered</AlertTitle>
+              <AlertDescription>{availability.execution.reason}</AlertDescription>
+            </div>
+          </Alert>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="accent" onClick={handleRepair} disabled={isRunning || availability?.configured === false}>
             {isRunning ? (
@@ -464,6 +486,13 @@ export function RepairPanel({
           {availability?.configured ? (
             <span className="font-mono text-[11px] text-ink-faint">
               {availability.model} @ {availability.endpointHost}
+            </span>
+          ) : null}
+          {availability?.configured ? (
+            <span className="font-mono text-[11px] text-ink-faint">
+              {availability.execution.mode === "container"
+                ? `container · ${availability.execution.runtime ?? "runtime"} ${availability.execution.runtimeVersion ?? ""}`.trim()
+                : "host execution (no OS isolation)"}
             </span>
           ) : null}
         </div>
@@ -498,6 +527,16 @@ export function RepairPanel({
                 <ShieldQuestion />
                 {VERDICT_LABEL[repair.status]}
               </Badge>
+              <span
+                className={cn(
+                  "font-mono text-[11px]",
+                  repair.execution.mode === "container" ? "text-ink-faint" : "text-attention",
+                )}
+              >
+                {repair.execution.mode === "container"
+                  ? `ran in ${repair.execution.runtime} · no network · read-only root`
+                  : "ran on the host · filesystem copy only"}
+              </span>
               {repair.status === "verified" ? (
                 <span className="text-[11px] text-pass">
                   Safe to review: every target defect disappeared, nothing measured regressed, and build and tests passed.

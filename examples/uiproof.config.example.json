@@ -11,7 +11,27 @@
         { "id": "pricing", "name": "Pricing", "path": "/pricing" },
         { "id": "moved", "name": "Redirects away (capture must be refused)", "path": "/moved" }
       ],
-      "allowedOrigins": []
+      "allowedOrigins": [],
+      "repair": {
+        "execution": {
+          "mode": "container",
+          "image": "node:24-bookworm-slim",
+          "network": "none",
+          "memoryMb": 2048,
+          "cpus": 2,
+          "pidsLimit": 512
+        },
+        "sandbox": {
+          "command": ["npm", "run", "start"],
+          "url": "http://127.0.0.1:4199",
+          "readyPath": "/healthz"
+        },
+        "build": ["npm", "run", "build"],
+        "test": ["npm", "test"],
+        "allow": ["src/**", "app/**"],
+        "guardRoutes": ["settings"],
+        "entryFiles": ["app/page.tsx"]
+      }
     }
   ]
 }

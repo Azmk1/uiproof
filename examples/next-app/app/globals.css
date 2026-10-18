@@ -1,0 +1,99 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+  background: #f7f8fa;
+  color: #15171c;
+}
+
+a {
+  color: #1348c8;
+}
+
+.shell {
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+  max-width: 960px;
+}
+
+nav[aria-label="Sections"] {
+  display: flex;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #d6d9df;
+}
+
+h1 {
+  font-size: 28px;
+  margin: 24px 0 8px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  background: #ffffff;
+  border: 1px solid #e3e6eb;
+  border-radius: 10px;
+  padding: 16px;
+  max-width: 420px;
+}
+
+input[type="text"],
+input[type="email"] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #8e95a2;
+  border-radius: 6px;
+  font: inherit;
+}
+
+button {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: #1348c8;
+  color: #ffffff;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* The deliberate narrow-viewport defect: a ledger that cannot shrink. */
+.ledger {
+  width: 680px;
+  margin-top: 32px;
+  background: #ffffff;
+  border: 1px solid #e3e6eb;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+/* The second deliberate defect on this fixture: a contrast failure, not a layout one. */
+.muted {
+  color: #9aa0a6;
+}
+
+.entries {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ledger table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ledger th,
+.ledger td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eff1f4;
+}

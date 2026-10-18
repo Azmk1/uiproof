@@ -55,6 +55,7 @@ function attempt(overrides: Partial<RepairAttempt> = {}): RepairAttempt {
     model: null,
     rejection: null,
     patchArtifact: "attempt-1.patch",
+    replyArtifact: null,
     artifacts: [],
     verification: {
       verdict: "rejected",

@@ -31,6 +31,50 @@ import type {
  * the sandbox did not itself produce.
  */
 
+/**
+ * Withdraws a verdict because the developer's source tree moved under the run.
+ *
+ * The measurements were taken against a revision that no longer exists, so "verified" would
+ * be a claim about a tree nobody has. The measurements themselves stay in the record — they
+ * are evidence, and the record never rewrites one — but the verdict becomes `unverified` and
+ * the reason it did is first in the list.
+ */
+export function invalidateForSourceDrift(
+  verification: RepairVerification,
+  detail: string,
+): RepairVerification {
+  const already = verification.regressions.some((check) => check.kind === "source");
+  const check: RegressionCheck = { kind: "source", id: "source-drift", status: "unverified", detail };
+  return {
+    ...verification,
+    verdict: "unverified",
+    reasons: [detail, ...verification.reasons],
+    regressions: already ? verification.regressions : [...verification.regressions, check],
+  };
+}
+
+/** One sentence describing how the original tree moved, for the record and the console. */
+export function sourceDriftDetail(input: {
+  readonly digestBefore: string;
+  readonly digestAfter: string;
+  readonly commitBefore: string | null;
+  readonly commitAfter: string | null;
+  readonly dirtyBefore: boolean | null;
+  readonly dirtyAfter: boolean | null;
+}): string {
+  const changes: string[] = [];
+  if (input.digestBefore !== input.digestAfter) changes.push("its files changed");
+  if (input.commitBefore !== input.commitAfter) {
+    changes.push(`HEAD moved from ${input.commitBefore ?? "(none)"} to ${input.commitAfter ?? "(none)"}`);
+  }
+  if (input.dirtyBefore !== input.dirtyAfter) changes.push("its uncommitted state changed");
+  const what = changes.length > 0 ? changes.join(", ") : "it no longer matches the pinned revision";
+  return (
+    `The source directory changed while the repair ran (${what}), so the measurements no longer describe a tree ` +
+    "that exists. The verdict is withdrawn rather than reported against a revision nobody has."
+  );
+}
+
 export interface VerifyRepairInput {
   /** The measured issues the proposal was allowed to address. */
   readonly targetIssues: readonly DiagnosticIssue[];
@@ -200,6 +244,20 @@ function regressionChecks(input: VerifyRepairInput): { checks: RegressionCheck[]
   }
 
   const beforeByKey = new Map(input.before.pages.map((page) => [pageKey(page), page] as const));
+  const afterKeys = new Set(input.after.pages.map(pageKey));
+
+  // Every page that was measured before must have been measured again. A guard route that
+  // silently disappears from the second pass would otherwise read as "no regression there".
+  for (const beforePage of input.before.pages) {
+    const key = pageKey(beforePage);
+    if (afterKeys.has(key)) continue;
+    checks.push({
+      kind: "measurement",
+      id: `${key}:missing-after`,
+      status: "unverified",
+      detail: `${key} was measured before the patch but not after it, so the candidate cannot be shown to have left it unchanged.`,
+    });
+  }
 
   for (const afterPage of input.after.pages) {
     const key = pageKey(afterPage);
@@ -358,6 +416,20 @@ export function verifyRepair(input: VerifyRepairInput): RepairVerification {
       scope: input.scope,
       notes,
     };
+  }
+
+  // A verified verdict requires both configured commands to have run and passed. A missing
+  // result is not a pass: an empty build list, or one whose entries were never recorded,
+  // leaves the verdict unverified rather than taking silence for success.
+  const passedNames = new Set(input.build.filter((command) => command.status === "passed").map((command) => command.name));
+  const missingCommands = (["build", "test"] as const).filter((name) => !passedNames.has(name));
+  if (missingCommands.length > 0) {
+    checks.push({
+      kind: missingCommands.includes("build") ? "build" : "test",
+      id: "commands-complete",
+      status: "unverified",
+      detail: `No passing ${missingCommands.join(" and ")} result was recorded for this candidate, so it cannot be verified.`,
+    });
   }
 
   const failures = checks.filter((check) => check.status === "regression");

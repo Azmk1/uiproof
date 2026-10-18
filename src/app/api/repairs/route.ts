@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { describeRepairAvailability } from "@/lib/repair/config";
+import { describeRepairAvailability, probeExecutionAvailability } from "@/lib/repair/config";
 import { runRepair } from "@/lib/repair/engine";
 import { listRepairs, MAX_REPAIR_HISTORY } from "@/lib/repair/storage";
 import type { RepairRequest, RepairsResponse, StartRepairResponse } from "@/lib/repair/types";
@@ -42,9 +42,15 @@ export async function GET(request: Request) {
     const sourceRegistered = catalog.projects.some(
       (entry) => resolveRegisteredSourceDir(entry, catalog.configPath) !== null,
     );
+    const availability = describeRepairAvailability({ project, sourceRegistered });
+    // The runtime probe is what turns "container execution is configured" into "container
+    // execution can run here". A stopped daemon is reported before the button is offered.
+    const execution = await probeExecutionAvailability(project?.repair ?? null).catch(
+      (cause: unknown) => ({ ...availability.execution, runtimeAvailable: false, reason: (cause as Error).message }),
+    );
     const payload: RepairsResponse = {
       repairs: await listRepairs(limit, scopeKey),
-      availability: describeRepairAvailability({ project, sourceRegistered }),
+      availability: { ...availability, execution },
     };
     return NextResponse.json(payload, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

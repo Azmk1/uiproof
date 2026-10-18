@@ -324,11 +324,14 @@ Repair (optional; needs a model, a source directory and a "repair" block)
   --max-attempts <n>   Repair attempts: 1 or 2 (default 2)
   --out <file>         Write the verified patch here as a standalone .patch file
   --keep-sandbox       Keep the temporary checkout for inspection (debugging only)
-                       The patch is applied only inside a temporary copy of the source,
-                       measured with the same audit engine, and verified against the
-                       configured build and test commands. The original tree is never
-                       written to. Exits 0 only when a patch is verified; 1 when no
-                       patch was verified; 2 for a configuration or infrastructure error.
+                       The patch is applied only inside a temporary copy of the source and
+                       everything runs in the registered execution environment: a container
+                       with no network interface, a read-only root filesystem, no capabilities
+                       and bounded memory/CPU/processes (repair.execution.mode "container"), or
+                       the host itself when the registration says trustHostExecution. The
+                       original tree is never written to. Exits 0 only when a patch is
+                       verified; 1 when no patch was verified; 2 for a configuration or
+                       infrastructure error.
 
 Baselines
   --approve            Approve this capture as a new baseline version (capture only)

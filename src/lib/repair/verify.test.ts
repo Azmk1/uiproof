@@ -9,7 +9,7 @@ import type {
   SandboxCommandResult,
   ScopeCheck,
 } from "./types";
-import { verifyRepair } from "./verify";
+import { invalidateForSourceDrift, sourceDriftDetail, verifyRepair } from "./verify";
 
 const CLEAN_A11Y: RepairAccessibilityMeasure = {
   violations: 0,
@@ -283,6 +283,93 @@ describe("verifyRepair", () => {
     });
     expect(result.verdict).toBe("rejected");
     expect(result.regressions.some((check) => check.id.endsWith(":dimensions"))).toBe(true);
+  });
+
+  it("never verifies when no build or test result was recorded at all", () => {
+    const noResults = verifyRepair({
+      targetIssues: [TARGET],
+      targetRoutePath: "/support",
+      before,
+      after: fixed,
+      scope: OK_SCOPE,
+      build: [],
+      overflowLimitPx: 1,
+    });
+    expect(noResults.verdict).toBe("unverified");
+    expect(noResults.regressions.some((check) => check.id === "commands-complete")).toBe(true);
+    expect(noResults.reasons.join(" ")).toMatch(/No passing build and test result was recorded/);
+  });
+
+  it("never verifies when only one of the two configured commands reported back", () => {
+    const half = verifyRepair({
+      targetIssues: [TARGET],
+      targetRoutePath: "/support",
+      before,
+      after: fixed,
+      scope: OK_SCOPE,
+      build: [command("build")],
+      overflowLimitPx: 1,
+    });
+    expect(half.verdict).toBe("unverified");
+    expect(half.regressions.some((check) => check.id === "commands-complete")).toBe(true);
+  });
+
+  it("leaves the candidate unverified when a guard route was measured before but not after", () => {
+    const withGuard = measurement("before", [
+      page({ accessibility: a11y({ "label@#support-email": "critical" }) }),
+      page({ routeId: "manual", path: "/manual" }),
+    ]);
+    const onlyTarget = measurement("after", [page()]);
+    const result = verifyRepair({
+      targetIssues: [TARGET],
+      targetRoutePath: "/support",
+      before: withGuard,
+      after: onlyTarget,
+      scope: OK_SCOPE,
+      build: [command("build"), command("test")],
+      overflowLimitPx: 1,
+    });
+    expect(result.verdict).toBe("unverified");
+    const missing = result.regressions.find((check) => check.id === "manual@mobile:missing-after");
+    expect(missing?.status).toBe("unverified");
+    expect(missing?.detail).toMatch(/not after it/);
+  });
+
+  it("withdraws a verified verdict when the developer's tree moved under the run", () => {
+    const verified = verifyRepair({
+      targetIssues: [TARGET],
+      targetRoutePath: "/support",
+      before,
+      after: fixed,
+      scope: OK_SCOPE,
+      build: [command("build"), command("test")],
+      overflowLimitPx: 1,
+    });
+    expect(verified.verdict).toBe("verified");
+
+    const detail = sourceDriftDetail({
+      digestBefore: "a".repeat(64),
+      digestAfter: "b".repeat(64),
+      commitBefore: "1111111",
+      commitAfter: "2222222",
+      dirtyBefore: false,
+      dirtyAfter: true,
+    });
+    expect(detail).toContain("its files changed");
+    expect(detail).toContain("HEAD moved from 1111111 to 2222222");
+
+    const withdrawn = invalidateForSourceDrift(verified, detail);
+    expect(withdrawn.verdict).toBe("unverified");
+    expect(withdrawn.reasons[0]).toBe(detail);
+    expect(withdrawn.regressions.some((check) => check.kind === "source" && check.status === "unverified")).toBe(true);
+    // The measurements are evidence and are never rewritten by the withdrawal.
+    expect(withdrawn.before).toEqual(verified.before);
+    expect(withdrawn.after).toEqual(verified.after);
+    expect(withdrawn.targets).toEqual(verified.targets);
+
+    // Withdrawing twice does not stack a second source check.
+    const twice = invalidateForSourceDrift(withdrawn, detail);
+    expect(twice.regressions.filter((check) => check.kind === "source")).toHaveLength(1);
   });
 
   it("rejects a scope violation even if every measurement looks good", () => {

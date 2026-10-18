@@ -19,6 +19,68 @@ import type { AxeImpact } from "@/lib/quality/types";
 
 export type RepairVerdict = "verified" | "partially-improved" | "rejected" | "unverified";
 
+/**
+ * Where generated application code is allowed to run.
+ *
+ *  · `container` — every command and the patched application run inside a container with no
+ *    network interface, a read-only root filesystem, no added capabilities and bounded
+ *    memory/CPU/PIDs. This is the default and the only mode UIProof describes as isolated.
+ *  · `host` — the commands run as ordinary child processes of UIProof with the developer's
+ *    own privileges. The sandbox is then a filesystem copy and nothing more. It requires an
+ *    explicit acknowledgement in the registration (`trustHostExecution: true`).
+ */
+export type RepairExecutionMode = "container" | "host";
+
+/** The optional `execution` block of a repair registration. Every field is developer-authored. */
+export interface RepairExecutionConfig {
+  readonly mode: RepairExecutionMode;
+  /** `auto` prefers docker, then podman. */
+  readonly runtime: "auto" | "docker" | "podman";
+  /** Image the sandbox runs in. Required in container mode. */
+  readonly image: string | null;
+  /**
+   * `none` gives the container no network interface at all; UIProof reaches the application
+   * through a relay on the container's stdio, so loopback testing still works. `egress`
+   * attaches the default bridge network, which is weaker and is recorded as such.
+   */
+  readonly network: "none" | "egress";
+  readonly memoryMb: number;
+  readonly cpus: number;
+  readonly pidsLimit: number;
+  /** `uid:gid` the container runs as, or `null` for the image's own default user. */
+  readonly user: string | null;
+  /**
+   * Named volume holding the application's installed dependencies, mounted read-only at
+   * `/work/node_modules`. Dependencies are never copied from the host: a Windows checkout
+   * of `node_modules` does not translate into a Linux container.
+   */
+  readonly dependenciesVolume: string | null;
+  /** Command that installs dependencies into the volume on first use. Runs with egress. */
+  readonly install: readonly string[] | null;
+  /** True only when the developer explicitly accepted running generated code with their own privileges. */
+  readonly trustHostExecution: boolean;
+}
+
+/** What the run record says about the isolation the verdict was produced under. */
+export interface RepairExecutionRecord {
+  readonly mode: RepairExecutionMode;
+  /** Container runtime that ran everything, or `null` for host execution. */
+  readonly runtime: string | null;
+  readonly serverVersion: string | null;
+  readonly image: string | null;
+  readonly network: "none" | "egress" | null;
+  readonly readOnlyRoot: boolean;
+  readonly capDropAll: boolean;
+  readonly noNewPrivileges: boolean;
+  readonly memoryMb: number | null;
+  readonly cpus: number | null;
+  readonly pidsLimit: number | null;
+  readonly user: string | null;
+  readonly dependenciesVolume: string | null;
+  /** One sentence, for the report and the console. */
+  readonly summary: string;
+}
+
 /** Which kind of stored report a repair starts from. */
 export type RepairTargetKind = "report" | "audit";
 
@@ -176,7 +238,15 @@ export interface TargetCheck {
 }
 
 export interface RegressionCheck {
-  readonly kind: "accessibility" | "layout" | "visual" | "build" | "test" | "scope";
+  readonly kind:
+    | "accessibility"
+    | "layout"
+    | "visual"
+    | "build"
+    | "test"
+    | "scope"
+    | "measurement"
+    | "source";
   /** Stable id: a fingerprint, a route/viewport pair, or the check name. */
   readonly id: string;
   readonly status: "clear" | "regression" | "unverified";
@@ -233,6 +303,8 @@ export interface RepairAttempt {
   readonly rejection: string | null;
   /** `attempt-1.patch`, when a patch was stored. */
   readonly patchArtifact: string | null;
+  /** `attempt-1-reply.txt`, when the answer could not become a patch at all. */
+  readonly replyArtifact: string | null;
   readonly artifacts: readonly RepairArtifact[];
   readonly verification: RepairVerification | null;
   /** The attempt's own verdict; the run's status is derived from all attempts. */
@@ -275,6 +347,8 @@ export interface RepairRun {
   readonly verifiedAttempt: number | null;
   readonly limits: RepairLimits;
   readonly model: { readonly provider: "openai-compatible"; readonly model: string; readonly endpointHost: string } | null;
+  /** Where the sandbox commands actually ran, and what restricted them. */
+  readonly execution: RepairExecutionRecord;
   readonly warnings: readonly string[];
   /** Literal marker: everything under `attempts[].proposal` came from a model. */
   readonly aiGenerated: true;
@@ -295,6 +369,8 @@ export interface RepairSummary {
   readonly verifiedAttempt: number | null;
   readonly commitSha: string | null;
   readonly originalUnchanged: boolean;
+  /** `container` or `host`; a verdict from a host run is not an isolated one. */
+  readonly executionMode: RepairExecutionMode;
   /** One-sentence reason the run ended the way it did. */
   readonly reason: string;
 }
@@ -317,6 +393,8 @@ export interface RepairSandboxConfig {
 /** The optional `repair` block of a registered project. */
 export interface RepairProjectConfig {
   readonly sandbox: RepairSandboxConfig;
+  /** Where the generated application is allowed to run. Container execution by default. */
+  readonly execution: RepairExecutionConfig;
   /** Command that must pass before and after a patch, or `null` when none is set. */
   readonly build: readonly string[] | null;
   /** Command that must pass before and after a patch, or `null` when none is set. */
@@ -348,6 +426,22 @@ export interface RepairAvailability {
   readonly testConfigured: boolean;
   readonly measuredRoutes: readonly string[];
   readonly missing: readonly string[];
+  /** What the registration asks for, before any runtime probe. */
+  readonly execution: RepairExecutionAvailability;
+}
+
+/** Whether the configured execution mode can actually run here, and why not when it cannot. */
+export interface RepairExecutionAvailability {
+  readonly mode: RepairExecutionMode | "unset";
+  readonly image: string | null;
+  readonly network: "none" | "egress" | null;
+  readonly dependenciesVolume: string | null;
+  /** `null` until the runtime has been probed; then whether a suitable runtime answered. */
+  readonly runtimeAvailable: boolean | null;
+  readonly runtime: string | null;
+  readonly runtimeVersion: string | null;
+  /** Why container execution is not available, when it is not. */
+  readonly reason: string | null;
 }
 
 /* ── API envelopes ─────────────────────────────────────────────────────────── */

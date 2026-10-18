@@ -118,7 +118,18 @@ export function isAuditFileName(name: unknown): name is string {
  */
 export const REPAIR_FILENAME = "repair.json";
 export const REPAIR_PATCH_PATTERN = /^attempt-[12]\.patch$/;
+/**
+ * The model answer exactly as it arrived, kept for an attempt whose answer was unusable.
+ * A rejected patch is the most convincing evidence this feature produces, and a rejected
+ * *answer* — malformed JSON, a missing field, an invented issue key — is evidence too.
+ */
+export const REPAIR_REPLY_PATTERN = /^attempt-[12]-reply\.txt$/;
 export const REPAIR_ARTIFACT_PATTERN = /^[a-z0-9][a-z0-9-]{0,72}\.png$/;
+
+/** Text artifacts (a patch or a raw reply) are served as text, images as PNG. */
+export function repairArtifactContentType(name: string): string {
+  return name.endsWith(".png") ? "image/png" : "text/plain; charset=utf-8";
+}
 
 export function resolveRepairsDir(cwd?: string): string {
   return path.join(resolveDataDir(cwd), "repairs");
@@ -146,7 +157,7 @@ export function resolveRepairRecordPath(repairId: unknown, cwd?: string): string
 export function isRepairArtifactName(name: unknown): name is string {
   return (
     typeof name === "string" &&
-    (REPAIR_ARTIFACT_PATTERN.test(name) || REPAIR_PATCH_PATTERN.test(name)) &&
+    (REPAIR_ARTIFACT_PATTERN.test(name) || REPAIR_PATCH_PATTERN.test(name) || REPAIR_REPLY_PATTERN.test(name)) &&
     !name.includes("..") &&
     !name.includes("/")
   );

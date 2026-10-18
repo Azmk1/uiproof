@@ -25,6 +25,16 @@
 /.uiproof/
 /.logs/
 
+# benchmark output: the newest report is committed evidence, stamped copies are local history
+/docs/benchmark/*.json
+!/docs/benchmark/latest.json
+
+# the Phase 9 example applications are built inside the repair sandbox, never in the tree
+/examples/vite-app/dist
+/examples/vite-app/node_modules
+/examples/next-app/.next
+/examples/next-app/node_modules
+
 # local project registrations (see examples/uiproof.config.example.json)
 /uiproof.config.json
 

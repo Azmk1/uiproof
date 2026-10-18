@@ -226,6 +226,21 @@ describe("buildProjectCaptureUrl", () => {
 });
 
 describe("parseProjectConfig repair block", () => {
+  const executionConfig = (overrides: Record<string, unknown> = {}) => ({
+    mode: "container",
+    runtime: "auto",
+    image: null,
+    network: "none",
+    memoryMb: 2048,
+    cpus: 2,
+    pidsLimit: 512,
+    user: null,
+    dependenciesVolume: null,
+    install: null,
+    trustHostExecution: false,
+    ...overrides,
+  });
+
   const base = JSON.parse(VALID).projects[0];
   const withRepair = (repair: unknown, extra: Record<string, unknown> = {}) =>
     JSON.stringify({
@@ -259,6 +274,7 @@ describe("parseProjectConfig repair block", () => {
         allow: ["views/**"],
         guardRoutes: ["checkout"],
         entryFiles: ["views/index.html"],
+        execution: { mode: "container", image: "node:24-bookworm-slim" },
       }),
     )[0];
     expect(project.repair).toEqual({
@@ -268,7 +284,76 @@ describe("parseProjectConfig repair block", () => {
       allow: ["views/**"],
       guardRoutes: ["checkout"],
       entryFiles: ["views/index.html"],
+      execution: executionConfig({ image: "node:24-bookworm-slim" }),
     });
+  });
+
+  it("defaults to container execution and refuses to guess an image", () => {
+    // No execution block at all: the mode is container, which needs an image, and a
+    // registration that names neither is refused rather than quietly running on the host.
+    expect(parseProjectConfig(withRepair({ sandbox })).error).toMatch(/image is required in container mode/);
+  });
+
+  it("parses an explicit container execution block", () => {
+    const project = parseOrThrow(
+      withRepair({
+        sandbox,
+        execution: {
+          mode: "container",
+          runtime: "podman",
+          image: "node:24-bookworm-slim",
+          network: "egress",
+          memoryMb: 1024,
+          cpus: 1.5,
+          pidsLimit: 128,
+          user: "1000:1000",
+          dependenciesVolume: "uiproof-app-deps",
+          install: ["npm", "ci"],
+        },
+      }),
+    )[0];
+    expect(project.repair?.execution).toEqual({
+      mode: "container",
+      runtime: "podman",
+      image: "node:24-bookworm-slim",
+      network: "egress",
+      memoryMb: 1024,
+      cpus: 1.5,
+      pidsLimit: 128,
+      user: "1000:1000",
+      dependenciesVolume: "uiproof-app-deps",
+      install: ["npm", "ci"],
+      trustHostExecution: false,
+    });
+  });
+
+  it("requires an explicit trust decision for host execution", () => {
+    expect(
+      parseProjectConfig(withRepair({ sandbox, execution: { mode: "host" } })).error,
+    ).toMatch(/runs generated code with your own privileges/);
+
+    const project = parseOrThrow(
+      withRepair({ sandbox, execution: { mode: "host", trustHostExecution: true } }),
+    )[0];
+    expect(project.repair?.execution.mode).toBe("host");
+    expect(project.repair?.execution.trustHostExecution).toBe(true);
+  });
+
+  it("refuses an execution block that cannot be honoured", () => {
+    const cases: Array<[unknown, RegExp]> = [
+      [{ sandbox, execution: { mode: "vm" } }, /must be "container" or "host"/],
+      [{ sandbox, execution: { mode: "container", image: "node" } }, /explicit tag/],
+      [{ sandbox, execution: { mode: "container", image: "node:24", network: "host" } }, /network/],
+      [{ sandbox, execution: { mode: "container", image: "node:24", runtime: "containerd" } }, /runtime/],
+      [{ sandbox, execution: { mode: "container", image: "node:24", memoryMb: 8 } }, /memoryMb/],
+      [{ sandbox, execution: { mode: "container", image: "node:24", cpus: 0 } }, /cpus/],
+      [{ sandbox, execution: { mode: "container", image: "node:24", user: "root" } }, /user/],
+      [{ sandbox, execution: { mode: "container", image: "node:24", install: ["npm", "ci"] } }, /dependenciesVolume/],
+      [{ sandbox, execution: { mode: "host", trustHostExecution: true, image: "node:24" } }, /only used in container mode/],
+    ];
+    for (const [repair, error] of cases) {
+      expect(parseProjectConfig(withRepair(repair)).error, JSON.stringify(repair)).toMatch(error);
+    }
   });
 
   it("refuses a sandbox that is not shell-free, loopback and secret-free", () => {

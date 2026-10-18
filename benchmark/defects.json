@@ -1,0 +1,185 @@
+{
+  "name": "uiproof-repair-benchmark",
+  "version": 1,
+  "description": "Ten realistic defects across three independent applications, each taken through the full repair loop: stored measurement, model proposal, isolated patch, build, tests, re-measurement, verdict.",
+  "howToRun": "UIPROOF_AI_API_KEY=… pnpm benchmark    (with no key it runs against the deterministic stub and says so in the report)",
+  "scenarios": [
+    {
+      "id": "repair-app-label",
+      "fixture": "repair-app",
+      "category": "accessibility",
+      "target": "audit",
+      "routeId": "support",
+      "routePath": "/",
+      "viewports": ["desktop"],
+      "issuePrefix": "a11y:label@",
+      "guardRoutes": ["manual"],
+      "patch": {
+        "file": "views/index.html",
+        "oldLine": "          <input id=\"email\" type=\"email\" autocomplete=\"email\" />",
+        "newLines": [
+          "          <label for=\"email\">Email</label>",
+          "          <input id=\"email\" type=\"email\" autocomplete=\"email\" />"
+        ]
+      },
+      "note": "A control nothing names, on a page that also has a contrast failure and a fixed-width banner: the patch has to fix one defect without touching the others."
+    },
+    {
+      "id": "repair-app-contrast",
+      "fixture": "repair-app",
+      "category": "accessibility",
+      "target": "audit",
+      "routeId": "support",
+      "routePath": "/",
+      "viewports": ["desktop"],
+      "issuePrefix": "a11y:color-contrast@",
+      "guardRoutes": ["manual"],
+      "patch": {
+        "file": "views/index.html",
+        "oldLine": "      <p class=\"note\" style=\"color: #9a9a9a\">Support replies arrive within one business day.</p>",
+        "newLines": [
+          "      <p class=\"note\" style=\"color: #4b5563\">Support replies arrive within one business day.</p>"
+        ]
+      },
+      "note": "#9a9a9a on white is 2.8:1. The fix is a colour, so the patch is a one-line edit and the measurement is the only thing that can judge it."
+    },
+    {
+      "id": "repair-app-overflow",
+      "fixture": "repair-app",
+      "category": "responsive",
+      "target": "audit",
+      "routeId": "support",
+      "routePath": "/",
+      "viewports": ["mobile"],
+      "issuePrefix": "responsive:",
+      "guardRoutes": ["manual"],
+      "patch": {
+        "file": "views/index.html",
+        "oldLine": "      <div class=\"banner\" id=\"maintenance-banner\" style=\"width: 720px\">",
+        "newLines": ["      <div class=\"banner\" id=\"maintenance-banner\" style=\"max-width: 720px\">"]
+      },
+      "note": "A 720px banner on a phone. The naive fix is to hide it; the test command in this fixture fails if the banner stops being a banner."
+    },
+    {
+      "id": "repair-app-visual",
+      "fixture": "repair-app",
+      "category": "visual",
+      "target": "report",
+      "routeId": "support",
+      "routePath": "/",
+      "viewports": ["desktop"],
+      "issuePrefix": "visual:",
+      "guardRoutes": ["manual"],
+      "patch": { "file": "views/index.html", "replaceWithSourceFile": "views/visual.good.html" },
+      "note": "The page drifted from its approved baseline. The only acceptable repair is a rendering that matches the approved pixels again."
+    },
+    {
+      "id": "vite-label",
+      "fixture": "vite-app",
+      "category": "accessibility",
+      "target": "audit",
+      "routeId": "home",
+      "routePath": "/",
+      "viewports": ["desktop"],
+      "issuePrefix": "a11y:label@",
+      "guardRoutes": ["settings"],
+      "patch": {
+        "file": "src/pages/Home.jsx",
+        "oldLine": "        <input id=\"support-email\" name=\"email\" type=\"email\" />",
+        "newLines": [
+          "        <label htmlFor=\"support-email\">Email</label>",
+          "        <input id=\"support-email\" name=\"email\" type=\"email\" />"
+        ]
+      },
+      "note": "The label is visible but never associated with the field: the patch has to add the association, and the fixture's own markup test must still pass afterwards."
+    },
+    {
+      "id": "vite-overflow",
+      "fixture": "vite-app",
+      "category": "responsive",
+      "target": "audit",
+      "routeId": "home",
+      "routePath": "/",
+      "viewports": ["mobile"],
+      "issuePrefix": "responsive:",
+      "guardRoutes": ["settings"],
+      "patch": {
+        "file": "src/styles.css",
+        "oldLine": ".log {",
+        "newLines": [".log {", "  max-width: 100%;", "  box-sizing: border-box;"]
+      },
+      "note": "A fixed 640px panel. `max-width: 100%` alone is not a fix: the panel's own padding is measured outside its width, so a first version of this reference patch left 14px of overflow and the run recorded it as partially-improved rather than verified. A complete fix also makes the box include its padding."
+    },
+    {
+      "id": "vite-contrast",
+      "fixture": "vite-app",
+      "category": "accessibility",
+      "target": "audit",
+      "routeId": "inbox",
+      "routePath": "/inbox",
+      "viewports": ["desktop"],
+      "issuePrefix": "a11y:color-contrast@",
+      "guardRoutes": ["home"],
+      "patch": {
+        "file": "src/styles.css",
+        "oldLine": "  color: #9aa0a6;",
+        "newLines": ["  color: #4b5563;"]
+      },
+      "note": "A muted line that is too muted. The fix belongs in the stylesheet, not in the component, and the model is only shown the files it may edit."
+    },
+    {
+      "id": "next-label",
+      "fixture": "next-app",
+      "category": "accessibility",
+      "target": "audit",
+      "routeId": "home",
+      "routePath": "/",
+      "viewports": ["desktop"],
+      "issuePrefix": "a11y:label@",
+      "guardRoutes": ["settings"],
+      "patch": {
+        "file": "app/page.jsx",
+        "oldLine": "        <input id=\"contact-email\" name=\"email\" type=\"email\" />",
+        "newLines": [
+          "        <label htmlFor=\"contact-email\">Email</label>",
+          "        <input id=\"contact-email\" name=\"email\" type=\"email\" />"
+        ]
+      },
+      "note": "The same defect class in a server-rendered React application, where the fix is JSX the framework then compiles."
+    },
+    {
+      "id": "next-overflow",
+      "fixture": "next-app",
+      "category": "responsive",
+      "target": "audit",
+      "routeId": "home",
+      "routePath": "/",
+      "viewports": ["mobile"],
+      "issuePrefix": "responsive:",
+      "guardRoutes": ["settings"],
+      "patch": {
+        "file": "app/globals.css",
+        "oldLine": ".ledger {",
+        "newLines": [".ledger {", "  max-width: 100%;", "  box-sizing: border-box;"]
+      },
+      "note": "A ledger table wider than a phone, in a Next.js application UIProof has never seen — and the same lesson as the Vite fixture: a max-width that ignores the border box still overflows."
+    },
+    {
+      "id": "next-contrast",
+      "fixture": "next-app",
+      "category": "accessibility",
+      "target": "audit",
+      "routeId": "ledger",
+      "routePath": "/ledger",
+      "viewports": ["desktop"],
+      "issuePrefix": "a11y:color-contrast@",
+      "guardRoutes": ["settings"],
+      "patch": {
+        "file": "app/globals.css",
+        "oldLine": "  color: #9aa0a6;",
+        "newLines": ["  color: #4b5563;"]
+      },
+      "note": "The last defect is a colour in a shared stylesheet: fixing it must not break the two routes that share the file."
+    }
+  ]
+}

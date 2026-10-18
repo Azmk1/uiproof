@@ -1,6 +1,7 @@
 import type { ProjectRoute, RegisteredProject } from "@/lib/compare/types";
 import { describeAvailability } from "@/lib/diagnosis/client";
-import type { RepairAvailability, RepairProjectConfig } from "./types";
+import { probeContainerRuntime, type ContainerProbe } from "./container";
+import type { RepairAvailability, RepairExecutionAvailability, RepairProjectConfig } from "./types";
 
 /**
  * Reads the repair half of a registration, and says plainly what is missing.
@@ -84,6 +85,70 @@ export function describeRepairAvailability(input: RepairAvailabilityInput): Repa
     testConfigured: config?.test !== null && config?.test !== undefined,
     measuredRoutes,
     missing,
+    execution: executionAvailabilityOf(config),
+  };
+}
+
+/** What the registration asks for, before anything is probed. */
+export function executionAvailabilityOf(config: RepairProjectConfig | null): RepairExecutionAvailability {
+  if (!config) {
+    return {
+      mode: "unset",
+      image: null,
+      network: null,
+      dependenciesVolume: null,
+      runtimeAvailable: null,
+      runtime: null,
+      runtimeVersion: null,
+      reason: 'No "repair" block is registered, so no execution mode is configured.',
+    };
+  }
+  const execution = config.execution;
+  return {
+    mode: execution.mode,
+    image: execution.image,
+    network: execution.network,
+    dependenciesVolume: execution.dependenciesVolume,
+    runtimeAvailable: null,
+    runtime: null,
+    runtimeVersion: null,
+    reason:
+      execution.mode === "host"
+        ? "Host execution is registered: generated code runs with the developer's own privileges."
+        : null,
+  };
+}
+
+/**
+ * Answers "can the configured execution mode actually run here?" by probing the runtime.
+ * A machine without Docker is told so — with the exact words to change in the registration
+ * if the developer decides to trust host execution instead.
+ */
+export async function probeExecutionAvailability(
+  config: RepairProjectConfig | null,
+  options: { readonly probe?: ContainerProbe } = {},
+): Promise<RepairExecutionAvailability> {
+  const base = executionAvailabilityOf(config);
+  if (!config || config.execution.mode === "host") return base;
+
+  const probe = options.probe ?? (await probeContainerRuntime({ runtime: config.execution.runtime }));
+  if (!probe.available) {
+    return {
+      ...base,
+      runtimeAvailable: false,
+      runtime: null,
+      runtimeVersion: null,
+      reason:
+        `${probe.reason} Container execution needs a working container runtime; without one the only alternative is ` +
+        '"mode": "host" with "trustHostExecution": true, which runs generated code with your own privileges.',
+    };
+  }
+  return {
+    ...base,
+    runtimeAvailable: true,
+    runtime: probe.runtime.runtime,
+    runtimeVersion: probe.runtime.serverVersion,
+    reason: null,
   };
 }
 

@@ -83,6 +83,7 @@ describe("AI repair dashboard panel", () => {
                 allow: ["views/**"],
                 guardRoutes: ["manual"],
                 entryFiles: ["views/index.html"],
+                execution: { mode: "host", trustHostExecution: true },
               },
             },
           ],

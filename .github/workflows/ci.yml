@@ -20,7 +20,10 @@ jobs:
   checks:
     name: lint · typecheck · test · build · e2e
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The browser suite now includes files that build Vite and Next.js applications inside
+    # containers and install a packed tarball, so a cold runner spends several minutes on
+    # image pulls, `npm ci` and two framework builds before the assertions start.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout

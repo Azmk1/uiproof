@@ -9,6 +9,7 @@ import type { RegisteredProject } from "@/lib/compare/types";
 import { issuesFromQualityReport } from "@/lib/diagnosis/context";
 import { runQualityAudit } from "@/lib/quality/audit";
 import { readAudit } from "@/lib/quality/storage";
+import { executionConfig } from "@/lib/repair/container";
 import { runRepair } from "@/lib/repair/engine";
 import { readRepair, readRepairArtifact, repairPatchName } from "@/lib/repair/storage";
 import type { RepairMeasurement, RepairPageMeasurement } from "@/lib/repair/types";
@@ -81,6 +82,10 @@ function projectFor(target: RepairApp): RegisteredProject {
       allow: ["views/**"],
       guardRoutes: ["manual"],
       entryFiles: ["views/index.html"],
+      // These cases run on the host on purpose: they are about the engine's verdict, not
+      // about the runtime. `repair-container.test.ts` covers the isolated path, and the
+      // host mode is only reachable at all with this acknowledgement on the record.
+      execution: executionConfig({ mode: "host", trustHostExecution: true }),
     },
   };
 }

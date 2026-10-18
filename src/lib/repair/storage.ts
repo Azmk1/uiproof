@@ -40,6 +40,16 @@ export function repairPatchName(attempt: number): string {
   return `attempt-${attempt}.patch`;
 }
 
+/**
+ * The stored file name of an unusable model answer. It is written whenever an attempt
+ * produced an answer that could not become a patch, so a rejected attempt is inspectable
+ * even when there is no diff to inspect.
+ */
+export function repairReplyName(attempt: number): string {
+  if (attempt !== 1 && attempt !== 2) throw new RangeError(`Invalid repair attempt number: ${attempt}`);
+  return `attempt-${attempt}-reply.txt`;
+}
+
 /** One sentence explaining why the run ended with its verdict, for the history row. */
 export function reasonOf(repair: RepairRun): string {
   const attempt = repair.attempts.find((entry) => entry.attempt === repair.verifiedAttempt) ?? repair.attempts.at(-1);
@@ -63,6 +73,7 @@ export function summarizeRepair(repair: RepairRun): RepairSummary {
     verifiedAttempt: repair.verifiedAttempt,
     commitSha: repair.revision.commitSha,
     originalUnchanged: repair.originalUnchanged,
+    executionMode: repair.execution?.mode ?? "host",
     reason: reasonOf(repair),
   };
 }

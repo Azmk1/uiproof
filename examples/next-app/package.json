@@ -1,0 +1,16 @@
+{
+  "name": "uiproof-next-fixture",
+  "private": true,
+  "version": "1.0.0",
+  "description": "An independent Next.js application UIProof is installed into, built and repaired in a container.",
+  "scripts": {
+    "build": "next build",
+    "start": "next start",
+    "test": "node --test \"tests/*.test.mjs\""
+  },
+  "dependencies": {
+    "next": "16.4.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

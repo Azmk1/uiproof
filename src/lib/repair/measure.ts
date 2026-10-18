@@ -188,9 +188,14 @@ export async function measureSandbox(options: MeasureSandboxOptions): Promise<Me
   const prefix = options.namePrefix ?? "";
 
   for (const entry of options.routes) {
+    // A guard route the run cannot measure is a guard route that cannot catch anything, so
+    // the measurement fails instead of quietly covering fewer pages than it claims to.
     if (entry.viewports.length === 0) {
-      warnings.push(`Route ${entry.route.id} was not measured: no viewport was selected.`);
-      continue;
+      throw new ComparisonError(
+        "repair_measurement_failed",
+        `Guard route ${entry.route.id} was registered without a viewport, so the sandbox cannot be measured completely. ` +
+          "Register a viewport for it (the report's own viewport is used for the failing route).",
+      );
     }
 
     let result;
@@ -210,6 +215,16 @@ export async function measureSandbox(options: MeasureSandboxOptions): Promise<Me
         "repair_measurement_failed",
         `The sandbox could not be measured at ${entry.route.path}: ${(cause as Error).message}`,
         { cause },
+      );
+    }
+
+    const measuredViewportIds = new Set(result.report.viewports.map((entry) => entry.viewport.id));
+    const missingViewports = entry.viewports.filter((viewport) => !measuredViewportIds.has(viewport.id));
+    if (missingViewports.length > 0) {
+      throw new ComparisonError(
+        "repair_measurement_failed",
+        `${entry.route.path} was not measured at ${missingViewports.map((viewport) => viewport.label).join(", ")}. ` +
+          "A repair is only verified against measurements that all ran.",
       );
     }
 

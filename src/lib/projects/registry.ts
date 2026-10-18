@@ -1,6 +1,6 @@
 import { isLoopbackHost } from "@/lib/http/trusted-request";
 import type { ComparisonMode, ProjectRoute, RegisteredProject } from "@/lib/compare/types";
-import type { RepairProjectConfig, RepairSandboxConfig } from "@/lib/repair/types";
+import type { RepairExecutionConfig, RepairProjectConfig, RepairSandboxConfig } from "@/lib/repair/types";
 
 /**
  * Registered applications, read from a local configuration file.
@@ -187,6 +187,149 @@ function parseSandbox(input: unknown, projectId: string): RepairSandboxConfig {
   return { command, url, readyPath, env };
 }
 
+const DOCKER_IMAGE = /^[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
+const USER_SPEC = /^[0-9]{1,7}(:[0-9]{1,7})?$/;
+const REPAIR_MODES = ["container", "host"] as const;
+const REPAIR_NETWORKS = ["none", "egress"] as const;
+const REPAIR_RUNTIMES = ["auto", "docker", "podman"] as const;
+
+/**
+ * The `execution` block: where generated application code is allowed to run.
+ *
+ * The default is container execution, because the alternative — running a model's patch
+ * with the developer's own privileges — is a decision only the developer can make, and they
+ * have to make it in writing. A registration that asks for host execution without saying
+ * `trustHostExecution: true` is refused with that sentence in the error, rather than
+ * quietly doing it.
+ */
+function parseExecution(input: unknown, projectId: string): RepairExecutionConfig {
+  const where = `project "${projectId}" repair.execution`;
+  const defaults: RepairExecutionConfig = {
+    mode: "container",
+    runtime: "auto",
+    image: null,
+    network: "none",
+    memoryMb: 2048,
+    cpus: 2,
+    pidsLimit: 512,
+    user: null,
+    dependenciesVolume: null,
+    install: null,
+    trustHostExecution: false,
+  };
+  // An absent block still becomes a complete configuration, and it goes through exactly the
+  // same validation as a written one: "not configured" must not be the one state that skips
+  // the requirement for an image.
+  if (input !== undefined && input !== null && (typeof input !== "object" || Array.isArray(input))) {
+    throw new RangeError(`${where} must be an object.`);
+  }
+  const source = (input ?? {}) as Record<string, unknown>;
+
+  const rawMode = source.mode;
+  const mode = rawMode === undefined || rawMode === null ? defaults.mode : rawMode;
+  if (typeof mode !== "string" || !(REPAIR_MODES as readonly string[]).includes(mode)) {
+    throw new RangeError(`${where}.mode must be "container" or "host".`);
+  }
+
+  const rawRuntime = source.runtime;
+  const runtime = rawRuntime === undefined || rawRuntime === null ? defaults.runtime : rawRuntime;
+  if (typeof runtime !== "string" || !(REPAIR_RUNTIMES as readonly string[]).includes(runtime)) {
+    throw new RangeError(`${where}.runtime must be "auto", "docker" or "podman".`);
+  }
+
+  const rawNetwork = source.network;
+  const network = rawNetwork === undefined || rawNetwork === null ? defaults.network : rawNetwork;
+  if (typeof network !== "string" || !(REPAIR_NETWORKS as readonly string[]).includes(network)) {
+    throw new RangeError(`${where}.network must be "none" or "egress".`);
+  }
+
+  const rawTrust = source.trustHostExecution;
+  const trustHostExecution = rawTrust === undefined || rawTrust === null ? false : rawTrust;
+  if (typeof trustHostExecution !== "boolean") {
+    throw new RangeError(`${where}.trustHostExecution must be true or false.`);
+  }
+
+  let image: string | null = null;
+  const rawImage = source.image;
+  if (rawImage !== undefined && rawImage !== null) {
+    if (typeof rawImage !== "string" || rawImage.length > 200 || !DOCKER_IMAGE.test(rawImage.trim())) {
+      throw new RangeError(
+        `${where}.image must be an image reference with an explicit tag, such as "node:24-bookworm-slim" — an untagged image can change under a run.`,
+      );
+    }
+    image = rawImage.trim();
+  }
+  if (mode === "container" && image === null) {
+    throw new RangeError(
+      `${where}.image is required in container mode; it is the environment the patched application is built and measured in. Add one, or set ${where}.mode to "host" with "trustHostExecution": true.`,
+    );
+  }
+  if (mode === "host" && image !== null) {
+    throw new RangeError(`${where}.image is only used in container mode; remove it or set ${where}.mode to "container".`);
+  }
+  if (mode === "host" && trustHostExecution !== true) {
+    throw new RangeError(
+      `${where}.mode is "host", which runs generated code with your own privileges. Set "trustHostExecution": true to accept that, or use container mode.`,
+    );
+  }
+
+  let user: string | null = null;
+  const rawUser = source.user;
+  if (rawUser !== undefined && rawUser !== null) {
+    if (typeof rawUser !== "string" || !USER_SPEC.test(rawUser.trim())) {
+      throw new RangeError(`${where}.user must be "uid" or "uid:gid" if it is set.`);
+    }
+    user = rawUser.trim();
+  }
+
+  let dependenciesVolume: string | null = null;
+  const rawVolume = source.dependenciesVolume;
+  if (rawVolume !== undefined && rawVolume !== null) {
+    if (typeof rawVolume !== "string" || !VOLUME_NAME.test(rawVolume.trim())) {
+      throw new RangeError(`${where}.dependenciesVolume must be a volume name (letters, digits, dot, dash, underscore).`);
+    }
+    dependenciesVolume = rawVolume.trim();
+  }
+
+  const install = source.install === undefined || source.install === null
+    ? null
+    : parseRepairCommand(source.install, `${where}.install`);
+  if (install !== null && dependenciesVolume === null) {
+    throw new RangeError(`${where}.install only makes sense with ${where}.dependenciesVolume, which names the volume it fills.`);
+  }
+
+  return {
+    mode: mode as RepairExecutionConfig["mode"],
+    runtime: runtime as RepairExecutionConfig["runtime"],
+    image,
+    network: network as RepairExecutionConfig["network"],
+    memoryMb: readBoundedInt(source.memoryMb, defaults.memoryMb, 256, 32_768, `${where}.memoryMb`),
+    cpus: readBoundedNumber(source.cpus, defaults.cpus, 0.5, 16, `${where}.cpus`),
+    pidsLimit: readBoundedInt(source.pidsLimit, defaults.pidsLimit, 64, 8192, `${where}.pidsLimit`),
+    user,
+    dependenciesVolume,
+    install,
+    trustHostExecution,
+  };
+}
+
+function readBoundedInt(value: unknown, fallback: number, min: number, max: number, where: string): number {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    throw new RangeError(`${where} must be an integer between ${min} and ${max}.`);
+  }
+  return value;
+}
+
+function readBoundedNumber(value: unknown, fallback: number, min: number, max: number, where: string): number {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) {
+    throw new RangeError(`${where} must be a number between ${min} and ${max}.`);
+  }
+  return value;
+}
+
 /**
  * The optional autonomous-repair block. It is validated as strictly as an origin: an
  * invalid sandbox fails the registration instead of being ignored, because a project that
@@ -249,7 +392,9 @@ function parseRepair(input: unknown, projectId: string, routeIds: readonly strin
     });
   }
 
-  return { sandbox, build, test, allow, guardRoutes, entryFiles };
+  const execution = parseExecution(source.execution, projectId);
+
+  return { sandbox, build, test, allow, guardRoutes, entryFiles, execution };
 }
 
 function parseRoute(input: unknown, projectId: string, index: number): ProjectRoute {
