@@ -1524,8 +1524,9 @@ own port, in one production session — capture-only **310 ms** (942 ms end to e
 - **Concurrency is handled, not coordinated.** Approvals cannot lose data, but the console has no
   live-updating view of a baseline that another process changed underneath it; reload to see it.
 - **Chromium must be installed.** Without `pnpm setup:browser` the engine returns `503` with that
-  instruction rather than failing obscurely. The browser suite skips nothing — it fails loudly if
-  Chromium is missing.
+  instruction rather than failing obscurely. The browser suite fails loudly if Chromium is missing;
+  only the files that need a container runtime skip themselves, and they name the reason — a skip is
+  counted as a skipped check, never as a pass.
 - **A run is still tied to one viewport.** Approving a baseline captures one preset; there is no
   multi-viewport baseline or "approve all viewports" action yet.
 - **The browser suite is smoke-level.** It covers the console flow, the audit regressions and the
