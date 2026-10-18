@@ -322,6 +322,7 @@ describe("createRepairExecutor", () => {
       expect(await mode(path.join(root, "src"))).toBe(0o777);
       expect(await mode(nested)).toBe(0o777);
       expect((await mode(file)) & 0o666).toBe(0o666);
+      expect((await mode(file)) & 0o111).toBe(0);
       expect((await mode(script)) & 0o111).toBe(0o111);
       expect((await mode(script)) & 0o666).toBe(0o666);
       // `chmod` follows symlinks; the copy's link must not change what it points at.

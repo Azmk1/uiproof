@@ -771,9 +771,11 @@ export async function makeSandboxWritable(root: string): Promise<void> {
       if (entry.isDirectory()) {
         pending.push(target);
       } else if (entry.isFile()) {
-        // Keep any executable bit; add read and write for every user the image might use.
+        // Read and write for every user the image might use; if the file is executable at
+        // all, executable for all of them too, or a build script would fail for a non-owner.
         const mode = (await stat(target)).mode & 0o777;
-        await chmod(target, mode | 0o666);
+        const executable = (mode & 0o111) !== 0 ? 0o111 : 0;
+        await chmod(target, mode | 0o666 | executable);
       }
     }
   }
