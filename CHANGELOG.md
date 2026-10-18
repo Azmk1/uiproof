@@ -42,7 +42,7 @@ claim.
 ### Installation
 
 - Published contents are the CLI: `bin/`, `dist/cli/`, `package.json`, `README.md`,
-  `CHANGELOG.md` and `docs/REPAIR-SECURITY.md` — a 416 KB tarball (425,845 bytes when packed here),
+  `CHANGELOG.md` and `docs/REPAIR-SECURITY.md` — a 413 KB tarball (422,426 bytes when packed here),
   no Next.js, no source, no tests.
 - The package declares the four dependencies the CLI loads (axe-core, pixelmatch,
   playwright, pngjs) as `dependencies` and everything the dashboard needs as
