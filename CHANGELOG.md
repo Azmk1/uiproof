@@ -42,8 +42,10 @@ claim.
 ### Installation
 
 - Published contents are the CLI: `bin/`, `dist/cli/`, `package.json`, `README.md`,
-  `CHANGELOG.md` and `docs/REPAIR-SECURITY.md` — a 413 KB tarball (422,426 bytes when packed here),
-  no Next.js, no source, no tests.
+  `CHANGELOG.md` and `docs/REPAIR-SECURITY.md` — a tarball of roughly 413 KB and exactly those six
+  entries, no Next.js, no source, no tests. An exact byte count is deliberately not quoted here: this
+  file is one of the six entries, so changing this sentence changes the number. `pnpm pack` prints
+  the size, and `e2e/distribution.test.ts` asserts the contents.
 - The package declares the four dependencies the CLI loads (axe-core, pixelmatch,
   playwright, pngjs) as `dependencies` and everything the dashboard needs as
   `devDependencies`, so installing a gate no longer downloads a web framework.
