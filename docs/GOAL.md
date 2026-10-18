@@ -190,5 +190,24 @@ outlives them:
 source directory, asks an OpenAI-compatible model to interpret what was measured, validates the
 answer and verifies every citation against the line UIProof actually read. It never writes to the
 application, never produces a patch or a pull request, never runs without credentials, and never
-changes a pass or a fail — a diagnosis has no verdict of its own. Automated repair remains out of
-scope until a later phase is explicitly approved.
+changes a pass or a fail — a diagnosis has no verdict of its own.
+
+## Phases 8–9 — recorded in PROGRESS.md
+
+Phase 8 (the autonomous repair engine) and Phase 9 (container-confined execution, integration into
+applications UIProof did not write, the installable distribution and the defect benchmark) were
+approved and delivered; their acceptance criteria, milestones and evidence are in
+[docs/PROGRESS.md](PROGRESS.md), with the security model in
+[docs/REPAIR-SECURITY.md](REPAIR-SECURITY.md), the corpus and its honest limits in
+[docs/BENCHMARK.md](BENCHMARK.md), and the release procedure in
+[docs/RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md). One boundary outlives them:
+
+**A repair is an isolated experiment, and it says what isolated means.** Generated application code
+and the project's own build and test commands run inside a container by default — no network
+interface, read-only root, capabilities dropped — and the run record states the runtime, image and
+flags that applied; when no container runtime is available the repair is refused rather than
+downgraded. Host execution requires an explicit acknowledgement and is recorded as unisolated. A
+repair never writes to the registered source tree, never changes an approved baseline, never commits
+and never opens a pull request: applying a verified patch stays a human act, and a `verified` verdict
+means the measured defect is gone, nothing measured regressed, the build and tests passed and the
+tree did not move — never that the code is good or that the absence of unmeasured defects was proven.

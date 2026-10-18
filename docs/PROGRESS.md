@@ -751,6 +751,56 @@ and leave independently verifiable evidence — without ever altering the develo
 
 ---
 
+## Phase 9 — container-confined repair, real applications and the distribution
+
+**Goal:** give a repair an operating-system boundary instead of a filesystem copy, prove the whole
+loop on applications UIProof did not write (a Vite app and a Next.js app, each with its own manifest,
+lockfile, build, tests and preview server), make the package something a third party can actually
+install and inspect, and replace "real-model quality is unmeasured" with a corpus anyone can run —
+including an explicit statement of which numbers are the harness and which are a model.
+
+### Acceptance criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | **Container execution is the default.** A repair runs the patched application and the registered commands in a container: no network interface, read-only root, all capabilities dropped, `no-new-privileges`, bounded memory/CPU/PIDs. A machine with no runtime is refused, never silently downgraded to host execution | **Verified** | `container.ts` builds the run arguments and probes the runtime (`docker`, then `podman`); `repair.execution.mode` defaults to `container` and `engine.ts` refuses an unusable configuration with a sentence naming the missing runtime. `e2e/repair-container.test.ts` asks the container itself — non-loopback interfaces, `EROFS` on `/`, `CapEff: 0`, the cgroup memory limit, 600 children bounded, a host `UIPROOF_AI_API_KEY` absent inside — and the pipeline test runs a complete repair inside one |
+| 2 | **Loopback testing survives the boundary.** The application is reached at `http://127.0.0.1:<port>` while the container keeps no network interface | **Verified** | A relay inside the container forwards the application's HTTP onto its stdio, and UIProof terminates it on loopback, so Chromium, axe-core and the comparison engine are unchanged. `e2e/repair-container.test.ts` reaches a server started in the container over that relay while `fetch` from inside fails |
+| 3 | **Host execution requires an explicit acknowledgement, and a verdict says which ran.** | **Verified** | `trustHostExecution: true` plus `"mode": "host"` is required; every `RepairRun` carries `execution` (`mode`, runtime, server version, image, network, the hardening flags, limits, volume) and one summary sentence, which the CLI prints, the API returns and the dashboard badge reads. A host run cannot be mistaken for an isolated one |
+| 4 | **It works on applications UIProof did not write.** Two independent frameworks, installed and built with their own toolchains, defect found and repaired in the container | **Verified** | `examples/vite-app` (React + Vite, `vite preview`, `node --test`) and `examples/next-app` (Next.js, `next start`, `node --test`) — neither imports UIProof. `e2e/framework-integration.test.ts`: the app's own `npm ci`, `npm run build`, `npm test` and preview server run in the container, the audit reaches the page through the relay, both routes are measured at two viewports before and after, the repair verifies, the fixture tree is unchanged, and no container or volume is left in the wrong place |
+| 5 | **Failures are withdrawn, not overstated.** A verdict cannot outlive the tree it was measured on | **Verified** | If the source content, `HEAD` or dirty state moves during a run, every verdict becomes `unverified` with the reason first; a route measured before but not after leaves the candidate unverified; `verified` requires a recorded passing build **and** test. `revision.ts`, `engine.ts` and `verify.test.ts` cover each case |
+| 6 | **The distribution is a real package, verified by installing it.** | **Verified** | `bin/uiproof.mjs` spawns the prebuilt `dist/cli/uiproof.mjs` that `prepack` writes; `package.json` declares the four runtime dependencies the CLI loads and nothing the dashboard needs. `e2e/distribution.test.ts` packs, unpacks outside the checkout, installs through the npm CLI, asserts the tarball's exact six entries, that the installed tree contains the four dependencies and not Next.js/React, that `--version` reports the packed version, that the package-manager bin shim works, that a capture and a gate run against an application in another directory, and that packing twice yields identical bundle bytes |
+| 7 | **The security statement is written down and matches the code.** | **Verified** | [REPAIR-SECURITY.md](REPAIR-SECURITY.md): the execution diagram, the flags, what the container is asked and what its answers must be, the configuration fields, and four explicit non-claims (not a VM, `egress` mode is weaker, a patch is data but its *application* code still runs, a verdict is not "good code") |
+| 8 | **The repair corpus is measurable, and the measurement says what it is.** | **Verified** | [benchmark/defects.json](../benchmark/defects.json) holds ten defects across the three applications; `pnpm benchmark` runs each through audit or baseline → proposal → container patch → build/test → re-measure → verdict and writes `docs/benchmark/latest.{json,md}`. With no key the patches are the corpus's own reference fixes and the report says the model is unmeasured; with a key they are the model's. [BENCHMARK.md](BENCHMARK.md) documents the corpus, the modes, the report and the limits |
+| 9 | **Nothing earlier regressed.** | **Verified** | `pnpm lint` clean, `pnpm typecheck` clean, **411 unit tests** pass across 33 files (412 in total; 1 skipped on a host without symlink privilege), production build succeeds, **97 browser tests** across 14 files, and the ten-scenario benchmark verifies 10/10 |
+| 10 | **Document and deliver.** | **Verified** | README: install and tarball contents, container-confined repair, the two framework fixtures, the benchmark, updated test tables and limitations. [CHANGELOG.md](../CHANGELOG.md) describes the release candidate; [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) is the procedure; this section records the evidence and the gaps |
+
+### Milestone log
+
+| Milestone | Outcome |
+|-----------|---------|
+| M65 — container executor | `container.ts`: runtime probe with honest failure texts, hardening arguments, the stdio relay, dependency volume with a one-time egress install, `RepairExecutor` with two implementations, teardown that removes its own containers; 17 unit tests |
+| M66 — execution configuration | `repair.execution` parsing and defaults, `executionRecordOf`, the engine's refusal path, the CLI warning, the API field and the dashboard badge |
+| M67 — verdict withdrawal | Revision re-read after the run; verdicts downgraded when the tree moved; guard routes must be measured after as well as before; `verified` requires build *and* test |
+| M68 — real applications | `examples/vite-app` and `examples/next-app` with their own defects, invariant test commands and a `PORT`/`HOST` contract a container needs anyway; `e2e/framework-integration.test.ts` |
+| M69 — distribution | `bin/uiproof.mjs`, `prepack`, the `files` allow-list, runtime-vs-dev dependencies split, `0.2.0-rc.1`, `CHANGELOG.md`, `REPAIR-SECURITY.md`, `e2e/distribution.test.ts` |
+| M70 — benchmark | `benchmark/defects.json`, `benchmark/run.test.ts`, `vitest.benchmark.config.mts`, `pnpm benchmark`, `docs/BENCHMARK.md`; the container suite also asserts an unusable container answer is never a pass |
+| M71 — verification and documentation | Full unit, browser, container, framework, distribution and benchmark runs; README, PROGRESS, CHANGELOG, RELEASE-CHECKLIST, BENCHMARK |
+
+### Evidence
+
+| Check | Result |
+|-------|--------|
+| Unit suite | **411 passed** across 33 files, 1 skipped (symlink privilege). Repair area: 65 tests across 7 files, of which 17 are the container executor |
+| Browser suite | **97 passed** across 14 files, including the container-security suite (6), the two-framework integration suite (7) and the distribution suite (7) |
+| Container isolation (`e2e/repair-container.test.ts`) | No non-loopback interface, outbound `fetch` refused, `EROFS` writing `/`, `/work` and `/tmp` writable, `CapEff: 0000000000000000`, 600 children bounded, the cgroup memory limit equal to the configured value, a host `UIPROOF_AI_API_KEY` absent inside, the relay serving a containerized server at `http://127.0.0.1:<port>`, no container left carrying the run's label, and a full repair verified inside it |
+| Independent applications (`e2e/framework-integration.test.ts`) | 7 tests, 58 s. Vite: the app's own `npm run build` + `npm test` inside the container, audit through the relay, `a11y:label@` fixed and verified, `home@desktop`/`home@mobile` measured before and after with no regression, tree unchanged. Next.js: same against `next start`, 27 s for the audit-and-repair test. Both leave the dependency volume and nothing else |
+| Distribution (`e2e/distribution.test.ts`) | 7 tests, 17 s. Tarball holds exactly `package.json`, `README.md`, `CHANGELOG.md`, `docs/REPAIR-SECURITY.md`, `bin/uiproof.mjs`, `dist/cli/uiproof.mjs`; the installed tree has the four runtime dependencies and no Next.js/React; `--version` equals the packed version through the bin shim; a capture lands a real PNG in a consumer-named store; a gate returns exit `1` on a changed page and `0` after the revert; two packs of one revision produce the same bundle hash |
+| Benchmark (`pnpm benchmark`) | **10/10 verified, all on the first attempt**, 197 s total, median 14.7 s, every scenario container execution, docker 29.8.2, `deterministic-stub` mode, 17,724 + 1,653 estimated tokens. The two overflow scenarios were `partially-improved` (304 px / 344 px → 14 px) until the reference patch also set `box-sizing: border-box` — the harness caught an incomplete fix rather than agreeing with it |
+| Live model | **Not run** — no `UIPROOF_AI_API_KEY`/`OPENAI_API_KEY` in this environment. Every patch in every test and benchmark run above came from a deterministic OpenAI-compatible stub or the corpus's own reference diff. The harness for live measurement exists; the live numbers do not |
+| Host execution | Covered by unit tests (refusal without `trustHostExecution`, the recorded summary) and by the container-friendly fixtures; it is the documented fallback, not the measured default |
+
+---
+
 ## Decisions made during implementation
 
 - **Route groups** `(console)` / `(fixtures)` keep console chrome off the screens under test.
@@ -795,9 +845,11 @@ and leave independently verifiable evidence — without ever altering the develo
 - Registered projects are loopback-only, and a page that redirects to another origin is refused
   rather than captured.
 - The CLI is installable from a tarball (`pnpm pack` → `pnpm add -D <tarball>`, verified in the
-  [pilot](PILOT.md)), but the package is still `private`: no registry, no consumer versioning
-  contract, and re-installing after an upstream change is manual. From inside this repository,
-  `pnpm uiproof` still rebuilds the git-ignored bundle when a source file changes.
+  [pilot](PILOT.md) and now by a suite that packs, installs and drives the result), and it ships a
+  changelog, a security statement and a release procedure. It is still `private`: no registry, no
+  consumer versioning contract beyond the version the tarball reports, and re-installing after an
+  upstream change is manual. From inside this repository, `pnpm uiproof` still rebuilds the git-ignored
+  bundle when a source file changes.
 - An approved baseline is only pixel-exact for the environment that rendered it. The committed
   example bundle is now rendered by the pinned image the gate runs in, and three independent runs
   produced identical bytes — but a different image digest, a different architecture or a page with
@@ -838,22 +890,36 @@ and leave independently verifiable evidence — without ever altering the develo
   24,000-character prompt; there is no multi-turn investigation, no repository-wide search and no
   tool use. Oversized material is dropped with a warning rather than silently truncated.
 - **No live provider call was made during verification.** The deterministic stub exercises the real
-  HTTP interface; a genuine OpenAI-compatible call still depends on the operator's credentials.
+  HTTP interface, and the benchmark corpus falls back to its own reference diffs; a genuine
+  OpenAI-compatible call still depends on the operator's credentials.
 - **A repair is an isolated experiment, not a merge.** It never writes to the registered source, never
   changes an approved baseline and never commits or opens a pull request; applying a verified patch is
   a manual action. The evidence proves only what was measured — the target and guard routes at the
   audited viewports, the configured build and test commands, and observable accessibility, layout and
   visual state.
-- **The repair sandbox is a copy, not a container.** Generated application code runs with the
-  developer's own OS privileges. Commands are limited to the registration and executed without a
-  shell, the environment is allow-listed and the server is loopback-bound, but this is protection
-  against accidental edits, not a boundary against hostile code.
+- **Repair execution is container-confined by default; host execution is a copy of the tree and
+  nothing more.** A container is not a virtual machine: it shares the host kernel, so the flags above
+  are the runtime's isolation plus restrictions, not a defence against a kernel exploit.
+  `"network": "egress"` gives the container a bridge interface and the run record says so. A patch is
+  data — parsed, scope-checked and applied to a copy — but the *application* code it contains runs
+  while the repair is measured; the container is what makes that acceptable, and `repair.allow` is
+  what keeps it near the files the model was shown. Host execution runs generated code with the
+  developer's own privileges and requires an explicit `trustHostExecution` acknowledgement.
+- **A container runtime is now a dependency of repair.** Capture, comparison, audits and the gate
+  need only Chromium, but a repair refuses to run without docker or podman rather than falling back.
+  The dependency is listed in [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
 - **Repair proposals are bounded and capped.** At most two attempts, 4 files and 200 changed lines per
   patch, one bounded model request per attempt. A defect that needs a wider change is out of scope and
   the run records the refusal rather than stretching the limits.
-- **Repair quality with a real model is unmeasured here.** The deterministic stub proves the
+- **Repair quality with a real model is still unmeasured here.** The deterministic stub proves the
   isolation, validation and verification pipeline — the numbers above are real measurements of real
-  patches — but not how often a live model proposes the right one. That remains the honest gap.
+  patches — and `pnpm benchmark` now runs the same corpus against a configured model whenever
+  credentials exist. No `UIPROOF_AI_API_KEY`/`OPENAI_API_KEY` was present in this environment, so this
+  record contains no live-model number: the harness exists, the measurement does not.
+- **The benchmark's own numbers are bounded and partly estimated.** Token counts are four characters
+  per token, not a tokeniser's count; cost is reported only if the operator supplies a price per
+  million tokens; the corpus is ten defects on three small applications, chosen by the same author as
+  the pipeline. A `live-model` run is a snapshot of one endpoint on one day.
 
 ## Blockers
 
@@ -890,12 +956,29 @@ and a deliberately bad patch, and each asserts the developer's tree is byte-iden
 No live model provider was called; that limitation is recorded here and in
 [PHASE8-REPORT.md](PHASE8-REPORT.md) rather than dressed up as model performance.
 
-The sharpening work from the pilot's friction list is still the next milestone: ignore regions
-recorded in the report, a git SHA per **run** (repairs already pin one), `uiproof check --all` across
-a whole project, the CLI published to a registry (the pilot took it as far as an installable
-tarball), and multi-viewport approvals. Two smaller items belong with it: an automated check that the
-manual branch protection settings in `docs/BASELINE-UPDATES.md` are actually configured, and a
-scheduled regeneration probe that fails when a new image digest changes rendering rather than
-letting it surface as a mystery regression. For repair, the next evidence to gather is real-model
-repair success across a corpus of defects and a cost/latency baseline — then, and only then, an
-optional review workflow for verified patches. Details at the end of the README.
+Phase 9 is delivered: a repair now runs generated application code inside a container by default —
+no network interface, read-only root, capabilities dropped, bounded resources, its own dependency
+volume — with loopback testing preserved by a relay, host execution behind an explicit
+acknowledgement, and the whole model written down in [REPAIR-SECURITY.md](REPAIR-SECURITY.md). The
+loop is proven on two applications UIProof did not write (React + Vite and Next.js, each with its own
+build, tests and preview server, run in the container), the package is installable and its tarball is
+asserted entry by entry by a suite that installs it and drives it from outside the checkout, and
+`pnpm benchmark` runs ten defects across the three applications with a report that states whether the
+patches came from a model or from the corpus's own reference fixes. Ten of ten verified in
+`deterministic-stub` mode; no live-model run was made, because no credentials exist here.
+
+The next approved action, in order:
+
+1. **Measure a live model.** Export a key and run `pnpm benchmark` against it, then commit the
+   resulting report. That turns "real-model repair quality is unmeasured" into a number, a cost and a
+   latency baseline — the largest remaining gap in the repair evidence.
+2. **The pilot's friction list**, unchanged: ignore regions recorded in the report, a git SHA per
+   **run**, `uiproof check --all` across a project, multi-viewport approvals.
+3. **Publish deliberately.** [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) is written; the package is
+   still `private: true` and nothing publishes itself.
+4. Two smaller items: an automated check that the manual branch-protection settings are configured,
+   and a scheduled regeneration probe that fails when a new image digest changes rendering rather
+   than letting it surface as a mystery regression.
+
+Only after (1) does an optional review workflow for verified patches become a question worth asking —
+and it is still not a merge. Details at the end of the README.
