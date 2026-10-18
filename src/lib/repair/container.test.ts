@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
   createRepairExecutor,
   executionConfig,
   executionRecordOf,
+  makeSandboxWritable,
   probeContainerRuntime,
   resetContainerProbeCache,
   writeRelay,
@@ -247,6 +248,27 @@ describe("createRepairExecutor", () => {
     ).rejects.toThrow(/docker is not installed.*trustHostExecution/s);
   });
 
+  it("opens the checkout so a capability-free container can write in it", async () => {
+    const sandboxDir = await tempDir();
+    await chmod(sandboxDir, 0o700);
+    const executor = await createRepairExecutor({
+      config: executionConfig({ image: "node:24" }),
+      sandboxDir,
+      helperDir: await tempDir(),
+      runId: "test",
+      probe: {
+        available: true,
+        runtime: { runtime: "docker", binary: "docker", serverVersion: "29.8.2" },
+        reason: null,
+      },
+      imagePresent: async () => true,
+    });
+    expect(executor.mode).toBe("container");
+    // The container drops CAP_DAC_OVERRIDE too, so the mount's own bits decide: a 0700 copy
+    // is unwritable inside the sandbox, which is how `vite build` failed on Linux only.
+    if (process.platform !== "win32") expect((await stat(sandboxDir)).mode & 0o777).toBe(0o777);
+  });
+
   it("writes the relay outside the checkout and reports container mode", async () => {
     const helperDir = await tempDir();
     const executor = await createRepairExecutor({
@@ -266,6 +288,46 @@ describe("createRepairExecutor", () => {
     const relay = await readFile(path.join(helperDir, RELAY_FILENAME), "utf8");
     expect(relay).toContain("UIProof repair relay");
     expect(await writeRelay(helperDir)).toBe(path.join(helperDir, RELAY_FILENAME));
+  });
+
+  it("makes directories writable, keeps executable bits and never follows a symlink", async () => {
+    const root = await tempDir();
+    const nested = path.join(root, "src", "pages");
+    await mkdir(nested, { recursive: true });
+    await chmod(root, 0o700);
+    await chmod(path.join(root, "src"), 0o700);
+    await chmod(nested, 0o700);
+    const file = path.join(nested, "page.jsx");
+    const script = path.join(root, "build.sh");
+    const outside = path.join(await tempDir(), "outside.txt");
+    await writeFile(file, "export default 1;\n", "utf8");
+    await writeFile(script, "#!/bin/sh\n", "utf8");
+    await writeFile(outside, "outside\n", "utf8");
+    await chmod(file, 0o600);
+    await chmod(script, 0o700);
+    await chmod(outside, 0o600);
+    const link = path.join(root, "escape");
+    let linked = true;
+    try {
+      await symlink(outside, link, "file");
+    } catch {
+      linked = false; // Windows without Developer Mode cannot create a symlink; covered on POSIX.
+    }
+
+    await makeSandboxWritable(root);
+
+    if (process.platform !== "win32") {
+      const mode = async (target: string): Promise<number> => (await stat(target)).mode & 0o777;
+      expect(await mode(root)).toBe(0o777);
+      expect(await mode(path.join(root, "src"))).toBe(0o777);
+      expect(await mode(nested)).toBe(0o777);
+      expect((await mode(file)) & 0o666).toBe(0o666);
+      expect((await mode(script)) & 0o111).toBe(0o111);
+      expect((await mode(script)) & 0o666).toBe(0o666);
+      // `chmod` follows symlinks; the copy's link must not change what it points at.
+      if (linked) expect(await mode(outside)).toBe(0o600);
+    }
+    expect(await readFile(file, "utf8")).toBe("export default 1;\n");
   });
 
   it("refuses a dependency volume that does not exist and cannot be filled", async () => {

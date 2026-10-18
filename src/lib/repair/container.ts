@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { ComparisonError } from "@/lib/compare/errors";
@@ -749,6 +749,36 @@ export async function writeRelay(helperDir: string): Promise<string> {
   return target;
 }
 
+/**
+ * Make the throwaway checkout writable by whatever user the image runs as.
+ *
+ * The container runs as the image's own user with every capability dropped, so even uid 0
+ * has no `DAC_OVERRIDE`: the copy's own permission bits apply. A copy created under a `0700`
+ * temporary directory — or with `0755` directories owned by the host user — is therefore
+ * unwritable inside the sandbox, and a build that creates `dist/` or `.next/` fails with
+ * `EACCES`. Docker Desktop's file sharing hides that; a Linux host does not. The copy is
+ * disposable and the container's own boundary is unchanged, so the copy is opened up rather
+ * than the mount relaxed. Symlinks are skipped: `chmod` would follow one out of the copy.
+ */
+export async function makeSandboxWritable(root: string): Promise<void> {
+  const pending = [root];
+  while (pending.length > 0) {
+    const directory = pending.pop() as string;
+    await chmod(directory, 0o777);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) continue;
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(target);
+      } else if (entry.isFile()) {
+        // Keep any executable bit; add read and write for every user the image might use.
+        const mode = (await stat(target)).mode & 0o777;
+        await chmod(target, mode | 0o666);
+      }
+    }
+  }
+}
+
 async function commandOutcome(
   runtime: string,
   args: readonly string[],
@@ -868,6 +898,7 @@ export async function createRepairExecutor(input: ExecutorInput): Promise<Repair
   };
 
   await writeRelay(input.helperDir);
+  await makeSandboxWritable(input.sandboxDir);
 
   // The image must exist before the run starts: pulling inside a run would either fail under
   // `--network none` or silently reach the network from inside the sandbox.
