@@ -1220,11 +1220,12 @@ typecheck, unit tests, production build, Chromium install, browser suite.
 
 ## Testing
 
-`pnpm test` runs **413 unit tests** across 33 files (414 in total: one skips itself on a host without
-symlink privilege), all covering the engine, the guards, the baseline
-store, the portable bundles, the quality measurements, the optional diagnosis, the CLI's parser and
-the pinned CI environment rather than the UI shell (one test skips itself on a Windows host without
-symlink privilege; the junction-escape case runs everywhere):
+`pnpm test` runs **414 unit tests** across 33 files: **414 passed** on the Linux CI runner, and
+**413 passed with one skip** on a Windows host without the symlink privilege — the skipped
+file-symlink test is reported as a skip, never counted as a pass, and the junction-escape case runs
+everywhere. They cover the engine, the guards, the baseline store, the portable bundles, the quality
+measurements, the optional diagnosis, the CLI's parser and the pinned CI environment rather than the
+UI shell:
 
 | File                            | Coverage                                                                                               |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
