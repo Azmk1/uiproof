@@ -1012,8 +1012,8 @@ nothing about a model — which the report states as its first caveat. With a ke
 corpus runs in **`live-model` mode** and the patches are the model's. The mode, model, endpoint host
 and container runtime are all in the report, so the two can never be confused.
 
-The recorded run verifies **10 / 10, all ten on the first attempt**, in 197 s (median 14.7 s), every
-scenario container execution on docker 29.8.2. It also caught a real mistake: the first reference fix
+The recorded run — **`deterministic-stub` mode, not a model** — verifies **10 / 10, all ten on the
+first attempt**, in 197 s (median 14.7 s), every scenario container execution on docker 29.8.2. It also caught a real mistake: the first reference fix
 for the two overflow scenarios added `max-width: 100%` and nothing else, and the benchmark recorded
 `partially-improved`, twice, with the measurement — 304 px and 344 px of document overflow reduced to
 14 px, because the panel's padding sat outside the width being constrained. Adding
@@ -1220,7 +1220,7 @@ typecheck, unit tests, production build, Chromium install, browser suite.
 
 ## Testing
 
-`pnpm test` runs **411 unit tests** across 33 files (412 in total: one skips itself on a host without
+`pnpm test` runs **413 unit tests** across 33 files (414 in total: one skips itself on a host without
 symlink privilege), all covering the engine, the guards, the baseline
 store, the portable bundles, the quality measurements, the optional diagnosis, the CLI's parser and
 the pinned CI environment rather than the UI shell (one test skips itself on a Windows host without
@@ -1258,7 +1258,7 @@ symlink privilege; the junction-escape case runs everywhere):
 | `lib/repair/prompt.test.ts` | What the model is shown: only measured issues, bounded excerpts of files that exist, the previous attempt's evidence on a revision, and nothing from outside the registered copy |
 | `lib/repair/verify.test.ts` | The verdict policy on measured before/after pairs: a fixed target with nothing else moving verifies, a fixed target with a new serious finding is rejected, an untouched target is rejected, an improvement that does not clear the defect is `partially-improved`, a build or test failure blocks verification, a failed scope check rejects, and an unmeasurable candidate is `unverified` — never a pass |
 | `lib/repair/revision.test.ts` | The pinned revision: commit SHA and dirty state read from a real Git repository, an empty or absent Git state reported rather than invented, the content digest stable across copies, a changed file or a deleted directory reported as stale, and the original tree proven identical after a run |
-| `lib/repair/container.test.ts` | The container boundary as a pure function of the configuration: the runtime probe answers for docker, podman, a stopped daemon and a missing CLI with three different messages; the hardening arguments always carry `--network none`, `--read-only`, `--cap-drop ALL`, `no-new-privileges`, the memory/CPU/PID limits and a read-only dependency mount; an untagged image or a missing image in container mode is refused; the environment is an allow-list that a secret-looking host variable cannot enter; the relay is written outside the checkout and never inside it; and the run's own record states the mode, network and limits it actually used |
+| `lib/repair/container.test.ts` | The container boundary as a pure function of the configuration: the runtime probe answers for docker, podman, a stopped daemon and a missing CLI with three different messages; the hardening arguments always carry `--network none`, `--read-only`, `--cap-drop ALL`, `no-new-privileges`, the memory/CPU/PID limits and a read-only dependency mount; an untagged image or a missing image in container mode is refused; the environment is an allow-list that a secret-looking host variable cannot enter; the relay is written outside the checkout and never inside it; the throwaway copy is opened so a container with `DAC_OVERRIDE` dropped can build in it, while a symlink out of the copy is never followed; and the run's own record states the mode, network and limits it actually used |
 | `lib/repair/engine.test.ts` | The engine's last rule without a browser, a model or a container: a verdict measured against one revision does not survive the tree moving — `verified` becomes `unverified` with the drift reason first, a moved commit or a dirty tree does the same, and an unchanged tree leaves every verdict alone |
 | `cli/finding-lines.test.ts` | What the CLI prints for a quality audit: a page whose only results are questions reports zero violations and the questions beside them, a needs-review result is marked so it cannot be read as a violation, a violation is left unmarked, the evidence (remediation, markup, failure summary) travels under each finding, an unstated impact says so, and nothing is printed that the report does not contain |
 
